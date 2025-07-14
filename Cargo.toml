@@ -1,0 +1,16 @@
+[package]
+name = "fastproto"
+version = "0.1.0"
+authors = ["pkozhem <pkozhem@gmail.com>"]
+description = "FastProto is fast and efficient protobuf library for Python, built on the top of Rust."
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/pkozhem/fastprotors"
+edition = "2021"
+
+[lib]
+name = "fastproto"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = "0.25.0"
