@@ -1,14 +1,26 @@
 use pyo3::prelude::*;
 
-/// Formats the sum of two numbers as string.
+mod decode;
+mod descriptor;
+mod encode;
+mod message;
+mod parse;
+mod wire;
+
+use message::Descriptor;
+
+/// Parse `DescriptorProto` bytes into a reusable [`Descriptor`]. Called once per
+/// message by the `message()` decorator at import time.
 #[pyfunction]
-fn sum_as_string(a: usize, b: usize) -> PyResult<String> {
-    Ok((a + b).to_string())
+fn compile_descriptor(data: &[u8]) -> PyResult<Descriptor> {
+    message::compile(data)
 }
 
-/// A Python module implemented in Rust.
+/// The native core module, imported by the `fastproto` Python package as
+/// `fastproto._core`.
 #[pymodule]
-fn fastproto(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;
+fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<Descriptor>()?;
+    m.add_function(wrap_pyfunction!(compile_descriptor, m)?)?;
     Ok(())
 }

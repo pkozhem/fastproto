@@ -12,10 +12,74 @@ classifiers = [
 ]
 dynamic = ["version"]
 
+[project.optional-dependencies]
+plugin = ["protobuf>=6,<8"]
+
+[project.scripts]
+protoc-gen-fastproto = "fastproto.plugin:main"
+
+[dependency-groups]
+dev = [
+    "maturin>=1.9,<2.0",
+    "pytest>=8",
+    "ruff>=0.15",
+    "ty>=0.0.5",
+    "fastproto[plugin]",
+    "types-protobuf>=6",
+]
+
 [tool.maturin]
 features = ["pyo3/extension-module"]
-include = ["src/fastproto.pyi"]
+python-source = "python"
+module-name = "fastproto._core"
 
 [build-system]
 requires = ["maturin>=1.9,<2.0"]
 build-backend = "maturin"
+
+[tool.ruff]
+target-version = "py313"
+src = ["python", "tests", "scripts"]
+extend-exclude = ["tests/generated"] # @generated code is not ours to lint
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM812", # trailing commas are the formatter's job
+    "D203",   # incompatible with D211 (no blank line before class docstring)
+    "D213",   # incompatible with D212 (summary on the first line)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "ANN",     # tests need no annotations
+    "D",       # tests need no docstrings
+    "S101",    # asserts are the substance of tests
+    "S404",    # tests legitimately shell out to protoc
+    "S603",    # subprocess calls in tests use trusted, fixed args
+    "SLF001",  # tests exercise the private `_core` helpers
+    "PLR2004", # magic numbers are fine in test assertions
+    "INP001",  # the tests directory is intentionally not a package
+    "N806",    # generated classes are bound to capitalized locals
+    "PLC0415", # conditional imports (skip-if-missing) must stay in-function
+    "ERA001",  # protobuf field-number notes read like commented-out code
+    "EM101",   # terse inline exception messages are fine in test helpers
+    "EM102",
+    "TRY003",
+]
+"scripts/**" = [
+    "S603", # dev tooling deliberately shells out
+    "S607", # protoc is resolved from PATH by design
+]
+
+[tool.ty.environment]
+python-version = "3.13"
+
+[tool.ty.src]
+include = ["python", "tests", "scripts"]
+exclude = [
+    "tests/generated",
+] # @generated; type-checked transitively when imported

@@ -5,7 +5,7 @@ authors = ["pkozhem <pkozhem@gmail.com>"]
 description = "FastProto is fast and efficient protobuf library for Python, built on the top of Rust."
 license = "MIT"
 readme = "README.md"
-homepage = "https://github.com/pkozhem/fastprotors"
+homepage = "https://github.com/pkozhem/fastproto"
 edition = "2021"
 
 [lib]

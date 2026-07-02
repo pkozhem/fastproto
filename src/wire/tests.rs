@@ -1,0 +1,121 @@
+use super::*;
+
+fn roundtrip_varint(value: u64) {
+    let mut buf = Vec::new();
+    write_varint(&mut buf, value);
+    let mut reader = Reader::new(&buf);
+    assert_eq!(reader.read_varint().unwrap(), value);
+    assert!(reader.is_empty());
+}
+
+#[test]
+fn varint_roundtrip_edges() {
+    for value in [0u64, 1, 127, 128, 300, 16_383, 16_384, u64::MAX] {
+        roundtrip_varint(value);
+    }
+}
+
+#[test]
+fn varint_known_encodings() {
+    let mut buf = Vec::new();
+    write_varint(&mut buf, 300);
+    assert_eq!(buf, vec![0xac, 0x02]);
+
+    buf.clear();
+    write_varint(&mut buf, 1);
+    assert_eq!(buf, vec![0x01]);
+}
+
+#[test]
+fn negative_int_is_ten_byte_varint() {
+    // Protobuf sign-extends negative int32/int64 to 64 bits.
+    let mut buf = Vec::new();
+    write_varint(&mut buf, (-1i64) as u64);
+    assert_eq!(buf.len(), 10);
+    let mut reader = Reader::new(&buf);
+    assert_eq!(reader.read_varint().unwrap() as i64, -1);
+}
+
+#[test]
+fn varint_overflow_is_error() {
+    let buf = [0xffu8; 11];
+    let mut reader = Reader::new(&buf);
+    assert_eq!(reader.read_varint(), Err(WireError::VarintOverflow));
+}
+
+#[test]
+fn varint_truncated_is_eof() {
+    let buf = [0x80u8]; // continuation bit set but nothing follows
+    let mut reader = Reader::new(&buf);
+    assert_eq!(reader.read_varint(), Err(WireError::UnexpectedEof));
+}
+
+#[test]
+fn tag_roundtrip() {
+    let mut buf = Vec::new();
+    write_tag(&mut buf, 5, WireType::Len);
+    let mut reader = Reader::new(&buf);
+    assert_eq!(reader.read_tag().unwrap(), (5, WireType::Len));
+}
+
+#[test]
+fn fixed_roundtrip() {
+    let mut buf = Vec::new();
+    write_fixed32(&mut buf, 0xdead_beef);
+    write_fixed64(&mut buf, 0x0123_4567_89ab_cdef);
+    let mut reader = Reader::new(&buf);
+    assert_eq!(reader.read_fixed32().unwrap(), 0xdead_beef);
+    assert_eq!(reader.read_fixed64().unwrap(), 0x0123_4567_89ab_cdef);
+}
+
+#[test]
+fn len_delimited_roundtrip() {
+    let mut buf = Vec::new();
+    write_len_delimited(&mut buf, b"hello");
+    let mut reader = Reader::new(&buf);
+    assert_eq!(reader.read_len_delimited().unwrap(), b"hello");
+}
+
+#[test]
+fn len_delimited_overrun_is_error() {
+    let mut buf = Vec::new();
+    write_varint(&mut buf, 10); // claims 10 bytes
+    buf.extend_from_slice(b"abc"); // only 3 present
+    let mut reader = Reader::new(&buf);
+    assert_eq!(reader.read_len_delimited(), Err(WireError::InvalidLength));
+}
+
+#[test]
+fn zigzag32() {
+    for value in [0i32, -1, 1, -2, 2, i32::MAX, i32::MIN] {
+        assert_eq!(zigzag_decode32(zigzag_encode32(value)), value);
+    }
+    assert_eq!(zigzag_encode32(-1), 1);
+    assert_eq!(zigzag_encode32(1), 2);
+}
+
+#[test]
+fn zigzag64() {
+    for value in [0i64, -1, 1, -2, 2, i64::MAX, i64::MIN] {
+        assert_eq!(zigzag_decode64(zigzag_encode64(value)), value);
+    }
+    assert_eq!(zigzag_encode64(-1), 1);
+}
+
+#[test]
+fn skip_unknown_fields() {
+    let mut buf = Vec::new();
+    write_tag(&mut buf, 1, WireType::Varint);
+    write_varint(&mut buf, 42);
+    write_tag(&mut buf, 2, WireType::Len);
+    write_len_delimited(&mut buf, b"skip me");
+    write_tag(&mut buf, 3, WireType::I32);
+    write_fixed32(&mut buf, 7);
+
+    let mut reader = Reader::new(&buf);
+    while !reader.is_empty() {
+        let (_field, wire) = reader.read_tag().unwrap();
+        reader.skip(wire).unwrap();
+    }
+    assert!(reader.is_empty());
+}
