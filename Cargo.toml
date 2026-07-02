@@ -1,6 +1,6 @@
 [package]
 name = "fastproto"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["pkozhem <pkozhem@gmail.com>"]
 description = "FastProto is fast and efficient protobuf library for Python, built on the top of Rust."
 license = "MIT"
