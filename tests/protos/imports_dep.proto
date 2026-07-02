@@ -1,0 +1,12 @@
+syntax = "proto3";
+package dep;
+
+enum Currency {
+  CURRENCY_UNSPECIFIED = 0;
+  CURRENCY_USD = 1;
+}
+
+message Money {
+  int64 amount = 1;
+  Currency currency = 2;
+}

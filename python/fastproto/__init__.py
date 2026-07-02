@@ -1,0 +1,154 @@
+"""FastProto: readable, Pythonic protobuf messages backed by a Rust core.
+
+Generated modules define plain ``@dataclass`` message types annotated with
+``Scalar.*`` field types and decorated with :func:`message`, which wires the
+class to the native (de)serialization engine.
+"""
+
+import sys
+from collections.abc import Callable
+from enum import IntEnum
+from typing import Annotated, ClassVar, Self, cast, override
+
+from ._core import Descriptor, compile_descriptor
+
+__all__ = ["Message", "Scalar", "message"]
+
+
+class _ScalarMeta:
+    """Marker attached to a ``Scalar.*`` annotation recording the proto type.
+
+    Purely informational: the actual wire type comes from the compiled
+    descriptor, so this never affects encoding. It exists so tools and humans
+    can recover the precise proto type from an annotation.
+    """
+
+    __slots__ = ("proto_name",)
+
+    proto_name: str
+
+    def __init__(self, proto_name: str) -> None:
+        self.proto_name = proto_name
+
+    @override
+    def __repr__(self) -> str:
+        return f"proto:{self.proto_name}"
+
+
+class Scalar:
+    """Namespace of proto scalar field types.
+
+    Each alias is an ``Annotated`` wrapper over the underlying Python type, so
+    ``Scalar.Int64`` type-checks exactly as ``int`` while still declaring, for
+    the reader, that the field is a proto ``int64``.
+    """
+
+    Double = Annotated[float, _ScalarMeta("double")]
+    Float = Annotated[float, _ScalarMeta("float")]
+    Int32 = Annotated[int, _ScalarMeta("int32")]
+    Int64 = Annotated[int, _ScalarMeta("int64")]
+    UInt32 = Annotated[int, _ScalarMeta("uint32")]
+    UInt64 = Annotated[int, _ScalarMeta("uint64")]
+    SInt32 = Annotated[int, _ScalarMeta("sint32")]
+    SInt64 = Annotated[int, _ScalarMeta("sint64")]
+    Fixed32 = Annotated[int, _ScalarMeta("fixed32")]
+    Fixed64 = Annotated[int, _ScalarMeta("fixed64")]
+    SFixed32 = Annotated[int, _ScalarMeta("sfixed32")]
+    SFixed64 = Annotated[int, _ScalarMeta("sfixed64")]
+    Bool = Annotated[bool, _ScalarMeta("bool")]
+    String = Annotated[str, _ScalarMeta("string")]
+    Bytes = Annotated[bytes, _ScalarMeta("bytes")]
+
+
+class Message:
+    """Base class for generated message dataclasses.
+
+    Provides the serialization API; the :func:`message` decorator attaches the
+    compiled descriptor as ``__fastproto__``. Generated classes are plain
+    ``@dataclass`` types that inherit from this, so ``to_bytes`` / ``from_bytes``
+    are fully typed for callers.
+    """
+
+    __slots__ = ()
+    __fastproto__: ClassVar[Descriptor]
+
+    def to_bytes(self) -> bytes:
+        """Serialize this message to protobuf wire bytes."""
+        _ensure_linked(type(self))
+        return self.__fastproto__.encode(self)
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> Self:
+        """Deserialize protobuf wire bytes into a new instance of ``cls``."""
+        _ensure_linked(cls)
+        return cls.__fastproto__.decode(cls, data)
+
+
+def _is_message_or_enum(target: type) -> bool:
+    """Whether ``target`` is a valid field-reference target.
+
+    Field references point at either a generated message class (carrying a
+    compiled ``__fastproto__`` descriptor) or an ``IntEnum`` subclass.
+    """
+    return issubclass(target, IntEnum) or hasattr(target, "__fastproto__")
+
+
+def _ensure_linked(cls: type[Message]) -> None:
+    """Resolve enum/message references for ``cls`` and the classes it references.
+
+    Deferred until first use because sibling classes may not exist when the
+    decorator runs. ``link`` marks the descriptor linked *before* we recurse,
+    which breaks reference cycles (A -> B -> A).
+    """
+    descriptor = cls.__fastproto__
+    if descriptor.is_linked:
+        return
+
+    references = descriptor.ref_fields()
+    if not references:
+        descriptor.link({})  # no enum/message fields — nothing to resolve
+        return
+
+    namespace = vars(sys.modules[cls.__module__])
+    resolved: dict[int, type] = {}
+    for number, type_name in references:
+        target = namespace.get(type_name)
+        if target is None:
+            msg = (
+                f"{cls.__qualname__}: cannot resolve referenced type "
+                f"{type_name!r} in module {cls.__module__!r}. It must be defined "
+                f"in or imported into that module (nested and cross-file types "
+                f"are emitted/imported by the code generator)."
+            )
+            raise TypeError(msg)
+        if not (isinstance(target, type) and _is_message_or_enum(target)):
+            msg = (
+                f"{cls.__qualname__}: referenced type {type_name!r} resolved to "
+                f"{target!r}, which is not a fastproto message or IntEnum. A "
+                f"same-named binding likely shadows the intended type."
+            )
+            raise TypeError(msg)
+        resolved[number] = target
+    descriptor.link(resolved)
+
+    for target in resolved.values():
+        if hasattr(target, "__fastproto__"):
+            _ensure_linked(cast("type[Message]", target))
+
+
+def message[MessageT: Message](
+    descriptor: bytes,
+) -> Callable[[type[MessageT]], type[MessageT]]:
+    """Bind a :class:`Message` dataclass to its compiled descriptor.
+
+    Parses the embedded ``DescriptorProto`` bytes once and stores the result on
+    the class as ``__fastproto__`` for :meth:`Message.to_bytes` /
+    :meth:`Message.from_bytes` to use.
+    """
+    compiled = compile_descriptor(descriptor)
+
+    def bind(cls: type[MessageT]) -> type[MessageT]:
+        cls.__fastproto__ = compiled
+        return cls
+
+    return bind

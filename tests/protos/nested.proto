@@ -1,0 +1,15 @@
+syntax = "proto3";
+package nested;
+
+message Outer {
+  message Inner {
+    string label = 1;
+  }
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_A = 1;
+  }
+  Inner inner = 1;
+  Kind kind = 2;
+  repeated Inner inners = 3;
+}

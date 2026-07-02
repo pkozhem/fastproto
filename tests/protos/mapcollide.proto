@@ -1,0 +1,16 @@
+syntax = "proto3";
+package coll;
+
+// A real, user-facing message whose name collides with the synthetic entry
+// type protoc generates for the `items` map below.
+message ItemsEntry {
+  string note = 1;
+}
+
+message Box {
+  map<string, int32> items = 1;
+  // Fully qualified so protoc binds it to the top-level message rather than the
+  // synthetic `Box.ItemsEntry` the map above generates -- their short names
+  // collide, which is exactly the case the parser must not misread as a map.
+  repeated .coll.ItemsEntry extras = 2;
+}

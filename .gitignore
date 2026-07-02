@@ -42,6 +42,10 @@ htmlcov/
 nosetests.xml
 coverage.xml
 
+# Linters / type checkers
+.ruff_cache/
+.ty_cache/
+
 # Translations
 *.mo
 
@@ -67,3 +71,8 @@ docs/_build/
 
 # VSCode
 .vscode/
+
+# AI SLOP
+.claude/
+.cursor/
+.codex/

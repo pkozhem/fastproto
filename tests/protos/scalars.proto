@@ -1,0 +1,25 @@
+syntax = "proto3";
+package scalars;
+
+message AllScalars {
+  double ratio = 1;
+  float temperature = 2;
+  int32 count = 3;
+  int64 total = 4;
+  uint32 ucount = 5;
+  uint64 utotal = 6;
+  sint32 delta = 7;
+  sint64 delta64 = 8;
+  fixed32 f32 = 9;
+  fixed64 f64 = 10;
+  sfixed32 sf32 = 11;
+  sfixed64 sf64 = 12;
+  bool enabled = 13;
+  string label = 14;
+  bytes payload = 15;
+}
+
+message Presence {
+  string name = 1;
+  optional string nickname = 2;
+}

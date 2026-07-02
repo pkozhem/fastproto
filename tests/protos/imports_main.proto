@@ -1,0 +1,11 @@
+syntax = "proto3";
+package main;
+
+import "imports_dep.proto";
+
+message Invoice {
+  dep.Money total = 1;
+  repeated dep.Money items = 2;
+  map<string, dep.Money> ledger = 3;
+  dep.Currency preferred = 4;
+}
