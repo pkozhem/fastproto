@@ -1,18 +1,53 @@
 name: release
 
-# Build wheels for every supported platform and publish to PyPI.
-# Runs only on version tags (`vX.Y.Z`); `workflow_dispatch` builds without publishing.
+# Manual, one-click release. The version lives in git tags (never committed to
+# `main`): this workflow computes the next version, sets it on the runner only,
+# builds wheels for every platform, publishes to PyPI (OIDC), and creates the
+# tag + GitHub Release.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version to increment
+        type: choice
+        options: [patch, minor, major]
+        default: patch
 
 permissions:
   contents: read
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      new: ${{ steps.compute.outputs.new }}
+      tag: ${{ steps.compute.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need all tags to find the latest version
+      - id: compute
+        run: |
+          latest=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          if [ -n "$latest" ]; then
+            base=${latest#v}
+          else
+            # No tags yet: seed from the current Cargo.toml version.
+            base=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          fi
+          IFS=. read -r major minor patch <<< "$base"
+          case "${{ inputs.bump }}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          new="$major.$minor.$patch"
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+          echo "tag=v$new" >> "$GITHUB_OUTPUT"
+          echo "Releasing $new (previous tag: ${latest:-none})"
+
   linux:
+    needs: version
     runs-on: ubuntu-22.04
     strategy:
       matrix:
@@ -22,19 +57,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Set version
+        run: python scripts/set_version.py "${{ needs.version.outputs.new }}"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist
           manylinux: auto
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-${{ matrix.target }}
           path: dist
 
   windows:
+    needs: version
     runs-on: windows-latest
     strategy:
       matrix:
@@ -45,18 +82,20 @@ jobs:
         with:
           python-version: "3.12"
           architecture: ${{ matrix.target }}
+      - name: Set version
+        run: python scripts/set_version.py "${{ needs.version.outputs.new }}"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-windows-${{ matrix.target }}
           path: dist
 
   macos:
+    needs: version
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -70,21 +109,28 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Set version
+        run: python scripts/set_version.py "${{ needs.version.outputs.new }}"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist
-          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-macos-${{ matrix.target }}
           path: dist
 
   sdist:
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Set version
+        run: python scripts/set_version.py "${{ needs.version.outputs.new }}"
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
@@ -96,24 +142,32 @@ jobs:
           path: dist
 
   release:
-    name: Publish to PyPI
+    name: Publish to PyPI + tag
+    needs: [version, linux, windows, macos, sdist]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: [linux, windows, macos, sdist]
     environment: pypi
     permissions:
-      id-token: write # Trusted Publishing (OIDC) — no API token needed
+      id-token: write # Trusted Publishing (OIDC) — no API token
       attestations: write # PEP 740 provenance attestations
-      contents: read
+      contents: write # create the tag + GitHub Release
     steps:
+      - uses: actions/checkout@v4
       - name: Collect all wheels and the sdist
         uses: actions/download-artifact@v4
         with:
           path: dist
           pattern: wheels-*
           merge-multiple: true
-      - name: Publish
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
           attestations: true
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ needs.version.outputs.tag }}" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "${{ needs.version.outputs.tag }}" \
+            --generate-notes
