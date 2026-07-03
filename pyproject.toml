@@ -23,6 +23,7 @@ protoc-gen-fastproto = "fastproto.plugin:main"
 
 [dependency-groups]
 dev = [
+    "commitizen>=3,<5",
     "maturin>=1.9,<2.0",
     "pytest>=8",
     "ruff>=0.15",
@@ -30,6 +31,9 @@ dev = [
     "fastproto[plugin]",
     "types-protobuf>=6",
 ]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
