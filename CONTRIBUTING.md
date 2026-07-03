@@ -76,14 +76,14 @@ branch's first commit, so writing that commit conventionally is usually enough.)
 This is enforced in CI by the required **`pr-title`** check — a non-conforming
 title blocks the merge.
 
-Format: `type(optional scope): summary`. Examples:
+Format: `type(optional scope): summary`. For example:
 
-- `feat: add map<> support to the codec`
-- `fix(decode): handle truncated varints`
-- `docs: expand the quick start`
-- `refactor(parse): split the descriptor parser`
-- `test: cover repeated enums`
-- `chore(ci): trim the build matrix`
+- `feat: <a new capability>`
+- `fix(decode): <a bug fix, optionally scoped>`
+- `docs: <documentation change>`
+- `refactor(parse): <internal change, no behavior change>`
+- `test: <added or changed tests>`
+- `chore(ci): <tooling / maintenance>`
 
 Common types: `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci`,
 `chore`. [Commitizen](https://commitizen-tools.github.io/commitizen/) is in the
