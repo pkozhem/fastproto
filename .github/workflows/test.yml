@@ -1,0 +1,54 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Sync (build the extension + dev tools)
+        run: uv sync
+      - name: Rust unit tests
+        run: uv run cargo test
+      - name: Lint
+        run: |
+          uv run ruff check python tests scripts
+          uv run ruff format --check python tests scripts
+      - name: Type check
+        run: uv run ty check
+      - name: Python tests
+        run: uv run pytest
+
+  # Single stable check name for branch protection: the matrix legs above have
+  # per-version names, so gate on this aggregate instead.
+  tests-pass:
+    if: always()
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify the test matrix succeeded
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "test matrix did not succeed"
+            exit 1
+          fi
