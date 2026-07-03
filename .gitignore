@@ -72,7 +72,10 @@ docs/_build/
 # VSCode
 .vscode/
 
-# AI SLOP
+# AI Slop
 .claude/
 .cursor/
 .codex/
+
+# Project
+TODO.md
