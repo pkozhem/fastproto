@@ -39,16 +39,43 @@ jobs:
       - name: Python tests
         run: uv run pytest
 
-  # Single stable check name for branch protection: the matrix legs above have
-  # per-version names, so gate on this aggregate instead.
-  tests-pass:
-    if: always()
-    needs: [test]
+  # Releases own the version (it lives in git tags and is set on the runner at
+  # release time), so a PR must never touch it. See release.yml.
+  version-guard:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Verify the test matrix succeeded
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Forbid version changes in Cargo.toml
+        run: |
+          base=$(git show '${{ github.event.pull_request.base.sha }}:Cargo.toml' \
+                 | grep -m1 '^version = ')
+          head=$(grep -m1 '^version = ' Cargo.toml)
+          if [ "$base" != "$head" ]; then
+            echo "::error::Do not change the version in Cargo.toml — releases bump it automatically (run the release workflow)."
+            echo "base: $base"
+            echo "head: $head"
+            exit 1
+          fi
+
+  # Single stable check name for branch protection. The matrix legs above have
+  # per-version names, and version-guard is skipped on push — gate on this.
+  tests-pass:
+    if: always()
+    needs: [test, version-guard]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs succeeded
         run: |
           if [ "${{ needs.test.result }}" != "success" ]; then
             echo "test matrix did not succeed"
+            exit 1
+          fi
+          # version-guard runs only on PRs; "skipped" (on push) is acceptable.
+          if [ "${{ needs.version-guard.result }}" != "success" ] \
+             && [ "${{ needs.version-guard.result }}" != "skipped" ]; then
+            echo "version-guard did not succeed"
             exit 1
           fi
