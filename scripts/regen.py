@@ -22,7 +22,7 @@ PROTOS = ROOT / "tests" / "protos"
 FIXTURES = ROOT / "tests" / "fixtures"
 GENERATED = ROOT / "tests" / "generated"
 
-PROTO_FILES = ["rich.proto", "scalars.proto"]
+PROTO_FILES = ["rich.proto", "scalars.proto", "tree.proto"]
 
 
 def _fds_path(proto: str) -> Path:

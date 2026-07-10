@@ -9,6 +9,12 @@
 
 use crate::wire::WireType;
 
+/// Maximum message nesting the codec will follow, on both encode and decode
+/// (matches the default recursion limit of google's implementations). Guards
+/// against stack exhaustion from adversarially nested input, and on encode it
+/// also catches reference cycles between Python objects.
+pub const MAX_DEPTH: usize = 100;
+
 /// A protobuf scalar (leaf) value type. Mirrors the `Scalar.*` aliases exposed
 /// on the Python side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

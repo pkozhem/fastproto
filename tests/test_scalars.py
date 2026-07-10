@@ -62,10 +62,35 @@ def test_optional_presence() -> None:
     assert Presence.from_bytes(Presence(name="x").to_bytes()).nickname is None
 
 
-def test_unknown_fields_are_skipped() -> None:
-    # Append an unknown field (number 99, varint 1); the decoder must ignore it.
-    data = AllScalars(count=5).to_bytes() + b"\x98\x06\x01"
-    assert AllScalars.from_bytes(data).count == 5
+# Unknown fields of every wire type: varint (field 99), length-delimited
+# (field 100), fixed64 (field 101), fixed32 (field 102).
+UNKNOWN_CHUNK = (
+    b"\x98\x06\x2a"  # 99 << 3 | 0, varint 42
+    b"\xa2\x06\x03abc"  # 100 << 3 | 2, len 3, b"abc"
+    b"\xa9\x06\x01\x02\x03\x04\x05\x06\x07\x08"  # 101 << 3 | 1, fixed64
+    b"\xb5\x06\x01\x02\x03\x04"  # 102 << 3 | 5, fixed32
+)
+
+
+def test_unknown_fields_are_preserved() -> None:
+    # Fields the schema doesn't know must survive decode -> encode (protobuf
+    # forward compatibility), and known fields must still decode correctly.
+    data = AllScalars(count=5, label="hi").to_bytes() + UNKNOWN_CHUNK
+    msg = AllScalars.from_bytes(data)
+    assert msg.count == 5
+    assert msg.label == "hi"
+
+    reencoded = msg.to_bytes()
+    assert UNKNOWN_CHUNK in reencoded
+    # ...and the re-encoded bytes still decode cleanly.
+    again = AllScalars.from_bytes(reencoded)
+    assert again == msg
+    assert UNKNOWN_CHUNK in again.to_bytes()
+
+
+def test_unknown_fields_do_not_leak_into_fresh_instances() -> None:
+    # A hand-constructed message has no unknown bytes to re-emit.
+    assert AllScalars(count=5).to_bytes() == b"\x18\x05"
 
 
 def test_scalar_annotations_are_transparent() -> None:

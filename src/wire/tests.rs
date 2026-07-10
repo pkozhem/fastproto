@@ -119,3 +119,55 @@ fn skip_unknown_fields() {
     }
     assert!(reader.is_empty());
 }
+
+#[test]
+fn raw_since_captures_skipped_fields() {
+    let mut buf = Vec::new();
+    write_tag(&mut buf, 1, WireType::Varint);
+    write_varint(&mut buf, 42);
+    write_tag(&mut buf, 2, WireType::Len);
+    write_len_delimited(&mut buf, b"payload");
+
+    let mut reader = Reader::new(&buf);
+    // Consume field 1, then capture the raw bytes of field 2.
+    reader.read_tag().unwrap();
+    reader.skip(WireType::Varint).unwrap();
+    let start = reader.pos();
+    let (_field, wire) = reader.read_tag().unwrap();
+    reader.skip(wire).unwrap();
+    assert_eq!(reader.raw_since(start), &buf[start..]);
+    assert!(reader.raw_since(start).ends_with(b"payload"));
+}
+
+mod properties {
+    use proptest::prelude::*;
+
+    use super::super::*;
+
+    proptest! {
+        /// Reading any primitive off arbitrary bytes must never panic.
+        #[test]
+        fn reader_never_panics(data in proptest::collection::vec(any::<u8>(), 0..256)) {
+            let mut reader = Reader::new(&data);
+            while !reader.is_empty() {
+                let Ok((_, wire)) = reader.read_tag() else { break };
+                if reader.skip(wire).is_err() {
+                    break;
+                }
+            }
+        }
+
+        /// Varint and zigzag encodings round-trip for every value.
+        #[test]
+        fn varint_roundtrips(value in any::<u64>()) {
+            let mut buf = Vec::new();
+            write_varint(&mut buf, value);
+            prop_assert_eq!(Reader::new(&buf).read_varint().unwrap(), value);
+        }
+
+        #[test]
+        fn zigzag_roundtrips(value in any::<i64>()) {
+            prop_assert_eq!(zigzag_decode64(zigzag_encode64(value)), value);
+        }
+    }
+}

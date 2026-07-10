@@ -93,3 +93,18 @@ fn message_field_is_optional() {
     assert_eq!(desc.fields[0].type_name.as_deref(), Some("Address"));
     assert_eq!(desc.fields[0].label, Label::Optional);
 }
+
+mod properties {
+    use proptest::prelude::*;
+
+    use super::super::parse_message;
+
+    proptest! {
+        /// The descriptor parser must never panic — arbitrary bytes are either
+        /// a valid `DescriptorProto` (Ok) or a clean error (Err).
+        #[test]
+        fn parse_message_never_panics(data in proptest::collection::vec(any::<u8>(), 0..512)) {
+            let _ = parse_message(&data);
+        }
+    }
+}

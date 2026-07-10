@@ -24,6 +24,7 @@ protoc-gen-fastproto = "fastproto.plugin:main"
 [dependency-groups]
 dev = [
     "commitizen>=3,<5",
+    "hypothesis>=6",
     "maturin>=1.9,<2.0",
     "pytest>=8",
     "ruff>=0.15",

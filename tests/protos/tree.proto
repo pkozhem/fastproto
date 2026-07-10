@@ -1,0 +1,9 @@
+syntax = "proto3";
+package tree;
+
+// A self-referential message: exercises recursive linking and the codec's
+// nesting-depth limit.
+message Node {
+  Node child = 1;
+  int32 value = 2;
+}

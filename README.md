@@ -156,6 +156,13 @@ Composite fields: `repeated T` → `list[T]`, `map<K, V>` → `dict[K, V]`,
   all-default message encodes to `b""`.
 - **`oneof`:** members are plain optional fields; setting more than one raises
   `ValueError` at encode time.
+- **Open enums (proto3):** an enum value not defined in your schema decodes to a
+  plain `int` (like google's runtime) and survives re-encoding.
+- **Unknown fields:** fields your schema doesn't know are preserved verbatim
+  across decode → encode (forward compatibility). They are invisible to
+  `__init__` / `repr` / `==`.
+- **Nesting limit:** messages deeper than 100 levels — or a cyclic object graph
+  on encode — raise `ValueError` instead of exhausting the stack.
 - **References:** sibling, self, and enum references resolve lazily on the first
   `to_bytes()` / `from_bytes()` — nothing for you to wire up.
 
