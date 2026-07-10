@@ -66,9 +66,16 @@ class Message:
     compiled descriptor as ``__fastproto__``. Generated classes are plain
     ``@dataclass`` types that inherit from this, so ``to_bytes`` / ``from_bytes``
     are fully typed for callers.
+
+    The ``_fastproto_unknown`` slot holds the raw wire bytes of fields the
+    schema doesn't know about: the decoder stores them and the encoder re-emits
+    them, so decode -> encode round-trips preserve fields added by newer
+    producers (protobuf forward compatibility). It is deliberately *not* a
+    dataclass field — adding an annotation here would make ``@dataclass`` treat
+    it as an ``__init__`` parameter on every generated class.
     """
 
-    __slots__ = ()
+    __slots__ = ("_fastproto_unknown",)
     __fastproto__: ClassVar[Descriptor]
 
     def to_bytes(self) -> bytes:

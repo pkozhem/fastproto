@@ -27,7 +27,7 @@ def _request(proto: str) -> CodeGeneratorRequest:
     return CodeGeneratorRequest(file_to_generate=[proto], proto_file=fileset.file)
 
 
-@pytest.mark.parametrize("proto", ["rich.proto", "scalars.proto"])
+@pytest.mark.parametrize("proto", ["rich.proto", "scalars.proto", "tree.proto"])
 def test_generates_committed_output(proto: str) -> None:
     response = plugin.generate(_request(proto))
     assert len(response.file) == 1

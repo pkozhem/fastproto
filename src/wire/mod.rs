@@ -55,6 +55,17 @@ impl<'a> Reader<'a> {
         self.pos >= self.buf.len()
     }
 
+    /// Current byte offset into the buffer.
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
+
+    /// The raw bytes consumed since `start` (a value previously returned by
+    /// [`Reader::pos`]). Used to preserve unknown fields verbatim.
+    pub fn raw_since(&self, start: usize) -> &'a [u8] {
+        &self.buf[start..self.pos]
+    }
+
     fn next_byte(&mut self) -> Result<u8, WireError> {
         let b = *self.buf.get(self.pos).ok_or(WireError::UnexpectedEof)?;
         self.pos += 1;

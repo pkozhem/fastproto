@@ -8,40 +8,57 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use crate::descriptor::{FieldKind, Label, MapValue, MessageDescriptor, ScalarType};
+use crate::descriptor::{FieldKind, Label, MapValue, MessageDescriptor, ScalarType, MAX_DEPTH};
 use crate::message::Descriptor;
 use crate::wire;
 
 /// Encode `instance` according to `desc`, appending to `buf`.
+///
+/// `depth` is the current message-nesting level (0 at the top); it is bounded
+/// by [`MAX_DEPTH`], which also catches reference cycles between Python
+/// objects (a self-referential message would otherwise recurse forever).
 pub fn encode_message(
     py: Python<'_>,
     instance: &Bound<'_, PyAny>,
     desc: &MessageDescriptor,
     buf: &mut Vec<u8>,
+    depth: usize,
 ) -> PyResult<()> {
+    if depth > MAX_DEPTH {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "message nesting exceeded {MAX_DEPTH} levels"
+        )));
+    }
     check_oneofs(instance, desc)?;
 
     for field in &desc.fields {
         let value = instance.getattr(field.name.as_str())?;
 
         if let FieldKind::Map { key, value: val_kind } = &field.kind {
-            encode_map(py, buf, field.number, *key, val_kind, &value)?;
+            encode_map(py, buf, field.number, *key, val_kind, &value, depth)?;
             continue;
         }
 
         match field.label {
-            Label::Repeated => encode_repeated(py, buf, field.number, &field.kind, &value)?,
+            Label::Repeated => encode_repeated(py, buf, field.number, &field.kind, &value, depth)?,
             Label::Optional => {
                 if !value.is_none() {
-                    encode_single(py, buf, field.number, &field.kind, &value)?;
+                    encode_single(py, buf, field.number, &field.kind, &value, depth)?;
                 }
             }
             Label::Single => {
                 if !is_default(&field.kind, &value)? {
-                    encode_single(py, buf, field.number, &field.kind, &value)?;
+                    encode_single(py, buf, field.number, &field.kind, &value, depth)?;
                 }
             }
         }
+    }
+
+    // Re-emit unknown fields captured by the decoder (stored on the hidden
+    // `Message` slot). The slot is unset on hand-constructed instances, so an
+    // AttributeError here just means "nothing to preserve".
+    if let Ok(raw) = instance.getattr("_fastproto_unknown") {
+        buf.extend_from_slice(&raw.extract::<Vec<u8>>()?);
     }
     Ok(())
 }
@@ -77,6 +94,7 @@ fn encode_single(
     number: u32,
     kind: &FieldKind,
     value: &Bound<'_, PyAny>,
+    depth: usize,
 ) -> PyResult<()> {
     match kind {
         FieldKind::Scalar(scalar) => {
@@ -90,7 +108,7 @@ fn encode_single(
         }
         FieldKind::Message => {
             let mut nested = Vec::new();
-            encode_message_value(py, value, &mut nested)?;
+            encode_message_value(py, value, &mut nested, depth)?;
             wire::write_tag(buf, number, wire::WireType::Len);
             wire::write_len_delimited(buf, &nested);
         }
@@ -104,13 +122,14 @@ fn encode_message_value(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
     out: &mut Vec<u8>,
+    depth: usize,
 ) -> PyResult<()> {
     let handle = value.get_type().getattr("__fastproto__")?;
     let desc = handle.downcast_into::<Descriptor>().map_err(|_| {
         pyo3::exceptions::PyTypeError::new_err("nested value is not a fastproto message")
     })?;
     let desc_ref = desc.borrow();
-    encode_message(py, value, &desc_ref.inner, out)
+    encode_message(py, value, &desc_ref.inner, out, depth + 1)
 }
 
 /// Encode a repeated field (packed for numeric scalars/enums, otherwise one
@@ -121,6 +140,7 @@ fn encode_repeated(
     number: u32,
     kind: &FieldKind,
     value: &Bound<'_, PyAny>,
+    depth: usize,
 ) -> PyResult<()> {
     match kind {
         FieldKind::Scalar(scalar) if scalar.is_packable() => {
@@ -154,7 +174,7 @@ fn encode_repeated(
         FieldKind::Message => {
             for item in value.try_iter()? {
                 let mut nested = Vec::new();
-                encode_message_value(py, &item?, &mut nested)?;
+                encode_message_value(py, &item?, &mut nested, depth)?;
                 wire::write_tag(buf, number, wire::WireType::Len);
                 wire::write_len_delimited(buf, &nested);
             }
@@ -172,6 +192,7 @@ fn encode_map(
     key: ScalarType,
     value_kind: &MapValue,
     value: &Bound<'_, PyAny>,
+    depth: usize,
 ) -> PyResult<()> {
     let dict = value.downcast::<PyDict>().map_err(|_| {
         pyo3::exceptions::PyTypeError::new_err("map field must be a dict")
@@ -194,7 +215,7 @@ fn encode_map(
             }
             MapValue::Message => {
                 let mut nested = Vec::new();
-                encode_message_value(py, &v, &mut nested)?;
+                encode_message_value(py, &v, &mut nested, depth)?;
                 wire::write_tag(&mut entry, 2, wire::WireType::Len);
                 wire::write_len_delimited(&mut entry, &nested);
             }

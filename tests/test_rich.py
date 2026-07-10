@@ -67,6 +67,28 @@ def test_defaults_and_presence() -> None:
     assert User.from_bytes(User(email="").to_bytes()).email == ""
 
 
+def test_open_enum_unknown_value_survives() -> None:
+    # proto3 enums are open: value 99 is not a Role member but is valid on the
+    # wire. Field `role` = 4 (varint): tag = (4<<3)|0 = 0x20, value 99 = 0x63.
+    data = b"\x20\x63"
+    user = User.from_bytes(data)
+    assert user.role == 99
+    assert not isinstance(user.role, Role)  # raw int fallback, like google
+
+    # The unknown value survives a re-encode round-trip.
+    assert User.from_bytes(user.to_bytes()).role == 99
+
+
+def test_open_enum_in_repeated() -> None:
+    # `roles` = 11, packed: tag = (11<<3)|2 = 0x5a, len 3, values 1, 99, 2.
+    data = b"\x5a\x03\x01\x63\x02"
+    user = User.from_bytes(data)
+    assert user.roles == [Role.ROLE_ADMIN, 99, Role.ROLE_USER]
+    assert isinstance(user.roles[0], Role)
+    assert not isinstance(user.roles[1], Role)
+    assert User.from_bytes(user.to_bytes()).roles == [1, 99, 2]
+
+
 def test_oneof_enforced() -> None:
     with pytest.raises(ValueError, match="oneof"):
         User(phone="a", telegram="b").to_bytes()
@@ -76,9 +98,8 @@ def test_oneof_enforced() -> None:
 
 def test_wire_compatible_with_reference() -> None:
     """Our bytes must be readable by google's protobuf, and vice versa."""
-    google = pytest.importorskip("google.protobuf")
-    descriptor_pb2 = google.descriptor_pb2
-    from google.protobuf import descriptor_pool, message_factory
+    pytest.importorskip("google.protobuf")
+    from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
     fileset = descriptor_pb2.FileDescriptorSet.FromString(
         (FIXTURES / "rich.fds").read_bytes(),
@@ -116,3 +137,10 @@ def test_wire_compatible_with_reference() -> None:
 
     # reference bytes -> our decoder decodes them faithfully
     assert User.from_bytes(ref.SerializeToString()) == user
+
+    # unknown fields we preserved on a decode -> encode round-trip must still
+    # parse cleanly in the reference implementation
+    unknown_chunk = b"\x98\x06\x2a"  # field 99, varint 42
+    roundtripped = User.from_bytes(user.to_bytes() + unknown_chunk).to_bytes()
+    ref.ParseFromString(roundtripped)
+    assert ref.id == 7  # known fields intact alongside the unknown one

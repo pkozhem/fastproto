@@ -12,20 +12,29 @@ use std::collections::HashMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyType};
 
-use crate::descriptor::{FieldKind, Label, MapValue, MessageDescriptor, ScalarType};
+use crate::descriptor::{FieldKind, Label, MapValue, MessageDescriptor, ScalarType, MAX_DEPTH};
 use crate::message::Descriptor;
 use crate::wire::{self, Reader, WireError, WireType};
 
 type Refs = HashMap<u32, Py<PyAny>>;
 
 /// Decode `data` into a new instance of `cls` according to `desc`.
+///
+/// `depth` is the current message-nesting level (0 at the top); it is bounded
+/// by [`MAX_DEPTH`] so adversarially nested input cannot exhaust the stack.
 pub fn decode_message<'py>(
     py: Python<'py>,
     cls: &Bound<'py, PyType>,
     desc: &MessageDescriptor,
     refs: &Refs,
     data: &[u8],
+    depth: usize,
 ) -> PyResult<Bound<'py, PyAny>> {
+    if depth > MAX_DEPTH {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "message nesting exceeded {MAX_DEPTH} levels"
+        )));
+    }
     let kwargs = PyDict::new(py);
 
     // Pre-create accumulators for repeated (list) and map (dict) fields.
@@ -43,13 +52,19 @@ pub fn decode_message<'py>(
         }
     }
 
+    // Raw bytes of fields the schema doesn't know about, preserved verbatim so
+    // a decode -> encode round-trip keeps them (protobuf forward compatibility).
+    let mut unknown = Vec::new();
+
     let mut reader = Reader::new(data);
     while !reader.is_empty() {
+        let start = reader.pos();
         let (number, wire_type) = reader.read_tag().map_err(wire_err)?;
         let field = match desc.field_by_number(number) {
             Some(f) => f,
             None => {
                 reader.skip(wire_type).map_err(wire_err)?;
+                unknown.extend_from_slice(reader.raw_since(start));
                 continue;
             }
         };
@@ -57,16 +72,19 @@ pub fn decode_message<'py>(
         match &field.kind {
             FieldKind::Map { key, value } => {
                 let entry = reader.read_len_delimited().map_err(wire_err)?;
-                let (k, v) = decode_map_entry(py, *key, value, refs.get(&number), entry)?;
+                let (k, v) = decode_map_entry(py, *key, value, refs.get(&number), entry, depth)?;
                 maps.get(&number).unwrap().set_item(k, v)?;
             }
             _ if field.label == Label::Repeated => {
                 let list = lists.get(&number).unwrap();
-                decode_repeated(py, &field.kind, refs.get(&number), wire_type, &mut reader, list)?;
+                decode_repeated(py, &field.kind, refs.get(&number), wire_type, &mut reader, list, depth)?;
             }
             FieldKind::Scalar(scalar) => {
                 if wire_type != scalar.wire_type() {
+                    // Wire type disagrees with the schema: treat as unknown
+                    // rather than mis-decode, and keep the bytes.
                     reader.skip(wire_type).map_err(wire_err)?;
+                    unknown.extend_from_slice(reader.raw_since(start));
                     continue;
                 }
                 let value = decode_scalar(py, *scalar, &mut reader)?;
@@ -79,13 +97,17 @@ pub fn decode_message<'py>(
             }
             FieldKind::Message => {
                 let sub = reader.read_len_delimited().map_err(wire_err)?;
-                let value = decode_message_value(py, refs.get(&number), sub)?;
+                let value = decode_message_value(py, refs.get(&number), sub, depth)?;
                 kwargs.set_item(field.name.as_str(), value)?;
             }
         }
     }
 
-    cls.call((), Some(&kwargs))
+    let instance = cls.call((), Some(&kwargs))?;
+    if !unknown.is_empty() {
+        instance.setattr("_fastproto_unknown", PyBytes::new(py, &unknown))?;
+    }
+    Ok(instance)
 }
 
 /// Append one or more repeated elements (handling packed encoding).
@@ -96,6 +118,7 @@ fn decode_repeated<'py>(
     wire_type: WireType,
     reader: &mut Reader<'_>,
     list: &Bound<'py, PyList>,
+    depth: usize,
 ) -> PyResult<()> {
     match kind {
         FieldKind::Scalar(scalar) if scalar.is_packable() => {
@@ -137,7 +160,7 @@ fn decode_repeated<'py>(
         FieldKind::Message => {
             if wire_type == WireType::Len {
                 let sub = reader.read_len_delimited().map_err(wire_err)?;
-                list.append(decode_message_value(py, class_ref, sub)?)?;
+                list.append(decode_message_value(py, class_ref, sub, depth)?)?;
             } else {
                 reader.skip(wire_type).map_err(wire_err)?;
             }
@@ -154,6 +177,7 @@ fn decode_map_entry<'py>(
     value_kind: &MapValue,
     class_ref: Option<&Py<PyAny>>,
     entry: &[u8],
+    depth: usize,
 ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
     let mut reader = Reader::new(entry);
     let mut key_obj: Option<Bound<'py, PyAny>> = None;
@@ -173,7 +197,7 @@ fn decode_map_entry<'py>(
                 }
                 MapValue::Message if wire == WireType::Len => {
                     let sub = reader.read_len_delimited().map_err(wire_err)?;
-                    val_obj = Some(decode_message_value(py, class_ref, sub)?);
+                    val_obj = Some(decode_message_value(py, class_ref, sub, depth)?);
                 }
                 _ => reader.skip(wire).map_err(wire_err)?,
             },
@@ -190,23 +214,31 @@ fn decode_map_entry<'py>(
         None => match value_kind {
             MapValue::Scalar(scalar) => scalar_default(py, *scalar)?,
             MapValue::Enum => coerce_enum(py, class_ref, 0)?,
-            MapValue::Message => decode_message_value(py, class_ref, &[])?,
+            MapValue::Message => decode_message_value(py, class_ref, &[], depth)?,
         },
     };
     Ok((key_obj, val_obj))
 }
 
-/// Coerce an integer to its Python `IntEnum` subclass (falling back to the raw
-/// int if the enum class is somehow unresolved).
+/// Coerce an integer to its Python `IntEnum` subclass.
+///
+/// proto3 enums are open: an undefined numeric value is valid on the wire, so
+/// when `IntEnum(value)` raises `ValueError` we keep the raw int (mirroring
+/// google's Python runtime). The raw int also survives re-encoding, since the
+/// encoder extracts a plain `i32` from either form.
 fn coerce_enum<'py>(
     py: Python<'py>,
     class_ref: Option<&Py<PyAny>>,
     value: i32,
 ) -> PyResult<Bound<'py, PyAny>> {
-    match class_ref {
-        Some(cls) => cls.bind(py).call1((value,)),
-        None => Ok(value.into_pyobject(py)?.into_any()),
+    if let Some(cls) = class_ref {
+        match cls.bind(py).call1((value,)) {
+            Ok(member) => return Ok(member),
+            Err(err) if err.is_instance_of::<pyo3::exceptions::PyValueError>(py) => {}
+            Err(err) => return Err(err),
+        }
     }
+    Ok(value.into_pyobject(py)?.into_any())
 }
 
 /// Decode a nested message by recursing through its class's descriptor.
@@ -214,6 +246,7 @@ fn decode_message_value<'py>(
     py: Python<'py>,
     class_ref: Option<&Py<PyAny>>,
     data: &[u8],
+    depth: usize,
 ) -> PyResult<Bound<'py, PyAny>> {
     let cls = class_ref.ok_or_else(|| {
         pyo3::exceptions::PyRuntimeError::new_err("message field was not linked to a class")
@@ -225,7 +258,7 @@ fn decode_message_value<'py>(
     })?;
     let desc_ref = desc.borrow();
     let ty = cls.downcast::<PyType>()?;
-    decode_message(py, ty, &desc_ref.inner, &desc_ref.refs, data)
+    decode_message(py, ty, &desc_ref.inner, &desc_ref.refs, data, depth + 1)
 }
 
 /// The Python default object for a scalar (used for omitted map keys/values).

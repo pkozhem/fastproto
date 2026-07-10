@@ -73,7 +73,7 @@ impl Descriptor {
         instance: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyBytes>> {
         let mut buf = Vec::new();
-        encode::encode_message(py, instance, &self.inner, &mut buf)?;
+        encode::encode_message(py, instance, &self.inner, &mut buf, 0)?;
         Ok(PyBytes::new(py, &buf))
     }
 
@@ -84,7 +84,7 @@ impl Descriptor {
         cls: &Bound<'py, PyType>,
         data: &[u8],
     ) -> PyResult<Bound<'py, PyAny>> {
-        decode::decode_message(py, cls, &self.inner, &self.refs, data)
+        decode::decode_message(py, cls, &self.inner, &self.refs, data, 0)
     }
 }
 
