@@ -44,11 +44,14 @@ Run the same gate that CI runs before opening a PR:
 
 ```bash
 uv run cargo test                          # Rust unit tests
-uv run ruff check python tests scripts     # lint
+cargo clippy --all-targets -- -D warnings  # Rust lint (clippy)
+uv run ruff check python tests scripts     # Python lint
 uv run ruff format --check python tests scripts
 uv run ty check                            # type check
 uv run pytest                              # Python tests
 ```
+
+`clippy` comes from `rust-toolchain.toml` (rustup installs it automatically).
 
 All of the above must be green. Linting is strict (`ruff` with `select = ["ALL"]`)
 and type checking is strict (`ty`); generated files under `tests/generated` are

@@ -39,6 +39,19 @@ jobs:
       - name: Python tests
         run: uv run pytest
 
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12" # pyo3 build needs an interpreter
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
   # Releases own the version (it lives in git tags and is set on the runner at
   # release time), so a PR must never touch it. See release.yml.
   version-guard:
@@ -64,13 +77,17 @@ jobs:
   # per-version names, and version-guard is skipped on push — gate on this.
   tests-pass:
     if: always()
-    needs: [test, version-guard]
+    needs: [test, clippy, version-guard]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
         run: |
           if [ "${{ needs.test.result }}" != "success" ]; then
             echo "test matrix did not succeed"
+            exit 1
+          fi
+          if [ "${{ needs.clippy.result }}" != "success" ]; then
+            echo "clippy did not succeed"
             exit 1
           fi
           # version-guard runs only on PRs; "skipped" (on push) is acceptable.
