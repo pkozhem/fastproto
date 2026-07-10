@@ -82,6 +82,19 @@ class Role(IntEnum):
     ROLE_USER = 2
 
 
+_ADDRESS_DESCRIPTOR = bytes.fromhex("...")  # @generated (bytes elided)
+
+
+@message(_ADDRESS_DESCRIPTOR)
+@dataclass(slots=True)
+class Address(Message):
+    city: Scalar.String = ""
+    street: Scalar.String = ""
+
+
+_USER_DESCRIPTOR = bytes.fromhex("...")  # @generated (bytes elided)
+
+
 @message(_USER_DESCRIPTOR)
 @dataclass(slots=True)
 class User(Message):
