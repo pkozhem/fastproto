@@ -15,6 +15,7 @@ request. Generated modules depend solely on ``fastproto`` at runtime.
 
 import sys
 from collections.abc import Iterable
+from typing import NamedTuple
 
 from google.protobuf.compiler import plugin_pb2
 from google.protobuf.descriptor_pb2 import (
@@ -23,6 +24,18 @@ from google.protobuf.descriptor_pb2 import (
     FieldDescriptorProto,
     FileDescriptorProto,
 )
+
+
+class _TypeInfo(NamedTuple):
+    """Where a named type (message or enum) is defined."""
+
+    file: str
+    message: DescriptorProto | None  # None for enums
+
+
+class _ShortNameCollisionError(Exception):
+    """Two types visible from one module share a short class name."""
+
 
 # Field numbers of the synthetic map entry message (key, value).
 _MAP_KEY_FIELD = 1
@@ -48,29 +61,164 @@ _SCALAR: dict[int, tuple[str, str]] = {
 }
 
 
+# Well-known types surfaced as native Python objects instead of generated
+# classes. The Rust codec converts on the wire; annotations use the stdlib type.
+_NATIVE_WKT: dict[str, str] = {
+    ".google.protobuf.Timestamp": "datetime",
+    ".google.protobuf.Duration": "timedelta",
+}
+
+
 def _short_name(type_name: str) -> str:
     """Reduce ``.pkg.Outer.Inner`` to ``Inner``."""
     return type_name.rsplit(".", 1)[-1]
 
 
-def _index_messages(file: FileDescriptorProto) -> dict[str, DescriptorProto]:
-    """Map every (possibly nested) message's fully-qualified name to its proto."""
-    index: dict[str, DescriptorProto] = {}
-    prefix = f".{file.package}" if file.package else ""
+def _index_types(files: Iterable[FileDescriptorProto]) -> dict[str, _TypeInfo]:
+    """Map every type's fully-qualified name to its definition site.
 
-    def walk(scope: str, messages: Iterable[DescriptorProto]) -> None:
-        for msg in messages:
-            full_name = f"{scope}.{msg.name}"
-            index[full_name] = msg
-            walk(full_name, msg.nested_type)
+    Covers messages (including nested ones, for map-entry detection) and enums
+    across ALL files of the request — `request.proto_file` contains the full
+    transitive import closure, which is what lets fields reference types from
+    other `.proto` files.
+    """
+    index: dict[str, _TypeInfo] = {}
+    for file in files:
+        prefix = f".{file.package}" if file.package else ""
 
-    walk(prefix, file.message_type)
+        def walk(
+            scope: str, messages: Iterable[DescriptorProto], file_name: str
+        ) -> None:
+            for msg in messages:
+                full_name = f"{scope}.{msg.name}"
+                index[full_name] = _TypeInfo(file_name, msg)
+                for enum in msg.enum_type:
+                    index[f"{full_name}.{enum.name}"] = _TypeInfo(file_name, None)
+                walk(full_name, msg.nested_type, file_name)
+
+        for enum in file.enum_type:
+            index[f"{prefix}.{enum.name}"] = _TypeInfo(file.name, None)
+        walk(prefix, file.message_type, file.name)
     return index
+
+
+def _module_of(proto_name: str) -> str:
+    """Dotted module path of a generated file: ``a/b.proto`` -> ``a.b_pb``."""
+    return f"{proto_name.removesuffix('.proto')}_pb".replace("/", ".")
+
+
+def _referenced_type_names(
+    file: FileDescriptorProto, index: dict[str, _TypeInfo]
+) -> list[str]:
+    """Full names of every message/enum referenced by this file's fields."""
+    names: list[str] = []
+    for msg in file.message_type:
+        if msg.options.map_entry:
+            continue
+        for f in msg.field:
+            entry = _map_entry(f, index)
+            target = (
+                next(x for x in entry.field if x.number == _MAP_VALUE_FIELD)
+                if entry is not None
+                else f
+            )
+            if _is_named_type(target):
+                names.append(target.type_name)
+    return names
+
+
+def _uses_scalar(file: FileDescriptorProto, index: dict[str, _TypeInfo]) -> bool:
+    """Whether any generated annotation references a ``Scalar.*`` alias."""
+    for msg in file.message_type:
+        if msg.options.map_entry:
+            continue
+        for f in msg.field:
+            if _map_entry(f, index) is not None:
+                return True  # map keys are always scalar
+            if f.type in _SCALAR:
+                return True
+    return False
+
+
+def _native_names(file: FileDescriptorProto, index: dict[str, _TypeInfo]) -> list[str]:
+    """Sorted stdlib names (datetime/timedelta) referenced by this file."""
+    names: set[str] = set()
+    for msg in file.message_type:
+        if msg.options.map_entry:
+            continue
+        for f in msg.field:
+            entry = _map_entry(f, index)
+            target = (
+                next(x for x in entry.field if x.number == _MAP_VALUE_FIELD)
+                if entry is not None
+                else f
+            )
+            if target.type_name in _NATIVE_WKT:
+                names.add(_NATIVE_WKT[target.type_name])
+    return sorted(names)
+
+
+def _external_imports(
+    file: FileDescriptorProto, index: dict[str, _TypeInfo]
+) -> list[str]:
+    """Dual-import lines for types this file references from other files.
+
+    Emits ``try: from .x_pb import Y / except ImportError: from x_pb import Y``
+    so generated modules work both inside a package and in a flat directory.
+    Raises :class:`_ShortNameCollisionError` when two visible types share a
+    short name (the annotations couldn't tell them apart).
+    """
+    # short name -> full name, seeded with this file's own definitions.
+    seen: dict[str, str] = {}
+    prefix = f".{file.package}" if file.package else ""
+    for enum in file.enum_type:
+        seen[enum.name] = f"{prefix}.{enum.name}"
+    for msg in file.message_type:
+        seen[msg.name] = f"{prefix}.{msg.name}"
+
+    # module -> sorted set of class names to import from it.
+    by_module: dict[str, set[str]] = {}
+    wellknown: set[str] = set()
+
+    def consider(type_name: str) -> None:
+        info = index.get(type_name)
+        if info is None or info.file == file.name:
+            return
+        short = _short_name(type_name)
+        if seen.setdefault(short, type_name) != type_name:
+            msg = (
+                f"cannot generate {file.name}: both {seen[short]} and {type_name}"
+                f" would be imported as `{short}`"
+            )
+            raise _ShortNameCollisionError(msg)
+        if info.file.startswith("google/protobuf/"):
+            # Structural well-known types ship inside the fastproto package.
+            wellknown.add(short)
+        else:
+            by_module.setdefault(_module_of(info.file), set()).add(short)
+
+    for type_name in _referenced_type_names(file, index):
+        consider(type_name)
+
+    lines: list[str] = []
+    if wellknown:
+        lines.append(f"from fastproto.wellknown import {', '.join(sorted(wellknown))}")
+    depth = file.name.count("/")
+    for module, names in sorted(by_module.items()):
+        joined = ", ".join(sorted(names))
+        relative = "." * (1 + depth) + module
+        lines += [
+            "try:",
+            f"    from {relative} import {joined}",
+            "except ImportError:  # generated modules used outside a package",
+            f"    from {module} import {joined}",
+        ]
+    return lines
 
 
 def _map_entry(
     field: FieldDescriptorProto,
-    index: dict[str, DescriptorProto],
+    index: dict[str, _TypeInfo],
 ) -> DescriptorProto | None:
     """Return the synthetic entry message if ``field`` is a ``map<>``, else None."""
     if (
@@ -78,7 +226,8 @@ def _map_entry(
         or field.type != FieldDescriptorProto.TYPE_MESSAGE
     ):
         return None
-    entry = index.get(field.type_name)
+    info = index.get(field.type_name)
+    entry = info.message if info is not None else None
     if entry is not None and entry.options.map_entry:
         return entry
     return None
@@ -88,6 +237,8 @@ def _element_annotation(field: FieldDescriptorProto) -> str:
     """Return the annotation for a single scalar/enum/message element."""
     if field.type in _SCALAR:
         return _SCALAR[field.type][0]
+    if field.type_name in _NATIVE_WKT:
+        return _NATIVE_WKT[field.type_name]
     if field.type in (
         FieldDescriptorProto.TYPE_ENUM,
         FieldDescriptorProto.TYPE_MESSAGE,
@@ -106,20 +257,50 @@ def _has_presence(field: FieldDescriptorProto) -> bool:
     return field.proto3_optional or real_oneof_member
 
 
-def _render_field(
-    field: FieldDescriptorProto, index: dict[str, DescriptorProto]
-) -> str:
-    """Render one dataclass field line (without leading indentation)."""
+def _is_named_type(field: FieldDescriptorProto) -> bool:
+    """Whether the field references a generated message/enum class.
+
+    Scalars use `Scalar.*` aliases and native well-known types use stdlib
+    classes imported at the top of the module — neither needs quoting or a
+    cross-file class import.
+    """
+    return (
+        field.type
+        in (
+            FieldDescriptorProto.TYPE_ENUM,
+            FieldDescriptorProto.TYPE_MESSAGE,
+        )
+        and field.type_name not in _NATIVE_WKT
+    )
+
+
+def _render_field(field: FieldDescriptorProto, index: dict[str, _TypeInfo]) -> str:
+    """Render one dataclass field line (without leading indentation).
+
+    Annotations that reference a message or enum class are quoted: class-body
+    annotations are evaluated eagerly (until PEP 649 lands in 3.14), so an
+    unquoted forward or cyclic reference would raise ``NameError`` at import.
+    """
     entry = _map_entry(field, index)
     if entry is not None:
         key_field = next(f for f in entry.field if f.number == _MAP_KEY_FIELD)
         value_field = next(f for f in entry.field if f.number == _MAP_VALUE_FIELD)
         key, value = _element_annotation(key_field), _element_annotation(value_field)
-        return f"{field.name}: dict[{key}, {value}] = field(default_factory=dict)"
+        annotation = f"dict[{key}, {value}]"
+        if _is_named_type(value_field):  # map keys are always scalar
+            annotation = f'"{annotation}"'
+        return f"{field.name}: {annotation} = field(default_factory=dict)"
 
     if field.label == FieldDescriptorProto.LABEL_REPEATED:
         element = _element_annotation(field)
-        return f"{field.name}: list[{element}] = field(default_factory=list)"
+        annotation = f"list[{element}]"
+        if _is_named_type(field):
+            annotation = f'"{annotation}"'
+        return f"{field.name}: {annotation} = field(default_factory=list)"
+
+    if field.type_name in _NATIVE_WKT:
+        # Native well-known type: plain stdlib object with presence.
+        return f"{field.name}: {_NATIVE_WKT[field.type_name]} | None = None"
 
     if field.type == FieldDescriptorProto.TYPE_MESSAGE:
         # Message fields always carry presence.
@@ -142,7 +323,7 @@ def _render_enum(enum: EnumDescriptorProto) -> str:
     return "\n".join([f"class {enum.name}(IntEnum):", *(body or ["    pass"])])
 
 
-def _render_message(msg: DescriptorProto, index: dict[str, DescriptorProto]) -> str:
+def _render_message(msg: DescriptorProto, index: dict[str, _TypeInfo]) -> str:
     """Render a message as its descriptor constant plus a decorated dataclass."""
     const = f"_{msg.name.upper()}_DESCRIPTOR"
     descriptor_hex = msg.SerializeToString().hex()
@@ -162,8 +343,13 @@ def _render_message(msg: DescriptorProto, index: dict[str, DescriptorProto]) -> 
     )
 
 
-def _render_header(file: FileDescriptorProto) -> str:
-    """Render the module header: banner and imports."""
+def _render_header(
+    file: FileDescriptorProto,
+    index: dict[str, _TypeInfo],
+    external: list[str],
+    natives: list[str],
+) -> str:
+    """Render the module header: banner, imports, and cross-file imports."""
     needs_field = any(
         f.label == FieldDescriptorProto.LABEL_REPEATED
         for msg in file.message_type
@@ -183,22 +369,76 @@ def _render_header(file: FileDescriptorProto) -> str:
         # `list[Unknown]`; the annotation already states the real element type.
         lines.append("# pyright: reportUnknownVariableType=false")
     lines.append(dataclass_import)
+    if natives:
+        lines.append(f"from datetime import {', '.join(natives)}")
     if file.enum_type:
         lines.append("from enum import IntEnum")
-    lines += ["", "from fastproto import Message, Scalar, message"]
+    names = (
+        "Message, Scalar, message" if _uses_scalar(file, index) else "Message, message"
+    )
+    lines += ["", f"from fastproto import {names}"]
+    if external:
+        lines += ["", *external]
     return "\n".join(lines)
 
 
-def _generate_file(file: FileDescriptorProto) -> str:
-    """Render the full ``<name>_pb.py`` source for one proto file."""
-    index = _index_messages(file)
-    blocks = [_render_header(file)]
-    blocks += [_render_enum(enum) for enum in file.enum_type]
+def _file_blocks(file: FileDescriptorProto, index: dict[str, _TypeInfo]) -> list[str]:
+    """Enum and message blocks of one proto file (no header)."""
+    blocks = [_render_enum(enum) for enum in file.enum_type]
     blocks += [
         _render_message(msg, index)
         for msg in file.message_type
         if not msg.options.map_entry  # synthetic map entries are not user-facing
     ]
+    return blocks
+
+
+def _generate_file(file: FileDescriptorProto, index: dict[str, _TypeInfo]) -> str:
+    """Render the full ``<name>_pb.py`` source for one proto file."""
+    header = _render_header(
+        file, index, _external_imports(file, index), _native_names(file, index)
+    )
+    return "\n\n\n".join([header, *_file_blocks(file, index)]) + "\n"
+
+
+# Files whose types are bundled as structural dataclasses in
+# ``fastproto.wellknown`` (Timestamp/Duration are native and excluded).
+WELLKNOWN_PROTOS = [
+    "google/protobuf/any.proto",
+    "google/protobuf/empty.proto",
+    "google/protobuf/field_mask.proto",
+    "google/protobuf/struct.proto",
+    "google/protobuf/wrappers.proto",
+]
+
+_WELLKNOWN_HEADER = '''"""Structural well-known types, bundled with fastproto.
+
+@generated by scripts/regen.py from protoc's google/protobuf descriptors --
+DO NOT EDIT. `Timestamp` and `Duration` are not here: the codec maps them to
+`datetime` / `timedelta` natively. Note that `Any` is protobuf's
+``google.protobuf.Any`` message, not ``typing.Any``.
+"""
+
+# pyright: reportUnknownVariableType=false
+from dataclasses import dataclass, field
+from enum import IntEnum
+
+from fastproto import Message, Scalar, message'''
+
+
+def generate_wellknown(files: Iterable[FileDescriptorProto]) -> str:
+    """Render ``fastproto/wellknown.py`` from the WKT file descriptors.
+
+    The well-known ``.proto`` files don't import each other, so their blocks
+    concatenate safely into one module. Shared by ``scripts/regen.py`` and the
+    golden test.
+    """
+    by_name = {f.name: f for f in files}
+    ordered = [by_name[name] for name in WELLKNOWN_PROTOS]
+    index = _index_types(ordered)
+    blocks = [_WELLKNOWN_HEADER]
+    for file in ordered:
+        blocks += _file_blocks(file, index)
     return "\n\n\n".join(blocks) + "\n"
 
 
@@ -216,10 +456,16 @@ def generate(
         plugin_pb2.CodeGeneratorResponse.FEATURE_PROTO3_OPTIONAL
     )
     files_by_name = {f.name: f for f in request.proto_file}
+    index = _index_types(request.proto_file)
     for proto_name in request.file_to_generate:
+        try:
+            content = _generate_file(files_by_name[proto_name], index)
+        except _ShortNameCollisionError as exc:
+            response.error = str(exc)
+            return response
         output = response.file.add()
         output.name = _output_name(proto_name)
-        output.content = _generate_file(files_by_name[proto_name])
+        output.content = content
     return response
 
 

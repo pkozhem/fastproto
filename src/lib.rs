@@ -5,6 +5,7 @@ mod descriptor;
 mod encode;
 mod message;
 mod parse;
+mod wellknown;
 mod wire;
 
 use message::Descriptor;

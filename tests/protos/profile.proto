@@ -1,0 +1,14 @@
+syntax = "proto3";
+package profile;
+
+import "common.proto";
+
+// Exercises every way a field can reference a type from another file:
+// single message, repeated message, map value, and a cross-file enum.
+message Profile {
+  string name = 1;
+  common.Address home = 2;
+  repeated common.Address past_homes = 3;
+  map<string, common.Address> places = 4;
+  common.Country citizenship = 5;
+}
