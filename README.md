@@ -130,28 +130,30 @@ No `SerializeToString()` / `ParseFromString()` ceremony and no reflection — ju
 
 ## Type mapping
 
-Each proto scalar maps to an alias under `fastproto.Scalar`. An alias is just
-the underlying Python type (`int`, `str`, ...) tagged with `Annotated[...]`, so
-it type-checks as the base type while still recording the exact wire type.
+- Each proto scalar maps to an alias under `fastproto.Scalar`. An alias is just
+  the underlying Python type (`int`, `str`, ...) tagged with `Annotated[...]`, so
+  it type-checks as the base type while still recording the exact wire type.
 
-| proto | Python | proto | Python |
-|---|---|---|---|
-| `double` | `Scalar.Double` | `fixed32` | `Scalar.Fixed32` |
-| `float` | `Scalar.Float` | `fixed64` | `Scalar.Fixed64` |
-| `int32` | `Scalar.Int32` | `sfixed32` | `Scalar.SFixed32` |
-| `int64` | `Scalar.Int64` | `sfixed64` | `Scalar.SFixed64` |
-| `uint32` | `Scalar.UInt32` | `bool` | `Scalar.Bool` |
-| `uint64` | `Scalar.UInt64` | `string` | `Scalar.String` |
-| `sint32` | `Scalar.SInt32` | `bytes` | `Scalar.Bytes` |
-| `sint64` | `Scalar.SInt64` | | |
+  | proto | Python | proto | Python |
+  |---|---|---|---|
+  | `double` | `Scalar.Double` | `fixed32` | `Scalar.Fixed32` |
+  | `float` | `Scalar.Float` | `fixed64` | `Scalar.Fixed64` |
+  | `int32` | `Scalar.Int32` | `sfixed32` | `Scalar.SFixed32` |
+  | `int64` | `Scalar.Int64` | `sfixed64` | `Scalar.SFixed64` |
+  | `uint32` | `Scalar.UInt32` | `bool` | `Scalar.Bool` |
+  | `uint64` | `Scalar.UInt64` | `string` | `Scalar.String` |
+  | `sint32` | `Scalar.SInt32` | `bytes` | `Scalar.Bytes` |
+  | `sint64` | `Scalar.SInt64` | | |
 
-Composite fields: `repeated T` → `list[T]`, `map<K, V>` → `dict[K, V]`,
-`enum` → `IntEnum`, and `optional` / message / `oneof` fields → `T | None`.
+- Composite fields: `repeated T` → `list[T]`, `map<K, V>` → `dict[K, V]`,
+  `enum` → `IntEnum`, and `optional` / message / `oneof` fields → `T | None`.
 
-Well-known types map to native objects: `google.protobuf.Timestamp` → `datetime`,
-`Duration` → `timedelta`; the rest (`Any`, `Struct`, wrappers, ...) are plain
-dataclasses in `fastproto.wellknown`. Multi-file schemas work — `import` in a
-`.proto` becomes an import between the generated modules.
+- Well-known types map to native objects: `google.protobuf.Timestamp` → `datetime`,
+  `Duration` → `timedelta`; the rest (`Any`, `Struct`, wrappers, ...) are plain
+  dataclasses in `fastproto.wellknown`.
+
+- Multi-file schemas work — `import` in a`.proto` becomes an import between the
+  generated modules.
 
 ## Semantics
 
