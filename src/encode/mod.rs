@@ -10,6 +10,7 @@ use pyo3::types::PyDict;
 
 use crate::descriptor::{FieldKind, Label, MapValue, MessageDescriptor, ScalarType, MAX_DEPTH};
 use crate::message::Descriptor;
+use crate::wellknown;
 use crate::wire;
 
 /// Encode `instance` according to `desc`, appending to `buf`.
@@ -112,9 +113,25 @@ fn encode_single(
             wire::write_tag(buf, number, wire::WireType::Len);
             wire::write_len_delimited(buf, &nested);
         }
+        FieldKind::Timestamp => {
+            let (secs, nanos) = wellknown::datetime_to_parts(py, value)?;
+            write_parts_field(buf, number, secs, nanos);
+        }
+        FieldKind::Duration => {
+            let (secs, nanos) = wellknown::timedelta_to_parts(value)?;
+            write_parts_field(buf, number, secs, nanos);
+        }
         FieldKind::Map { .. } => unreachable!("maps handled separately"),
     }
     Ok(())
+}
+
+/// Write a Timestamp/Duration submessage as one tagged length-delimited field.
+fn write_parts_field(buf: &mut Vec<u8>, number: u32, secs: i64, nanos: i32) {
+    let mut nested = Vec::new();
+    wellknown::encode_parts(&mut nested, secs, nanos);
+    wire::write_tag(buf, number, wire::WireType::Len);
+    wire::write_len_delimited(buf, &nested);
 }
 
 /// Encode a nested message by recursing through its own descriptor.
@@ -179,6 +196,18 @@ fn encode_repeated(
                 wire::write_len_delimited(buf, &nested);
             }
         }
+        FieldKind::Timestamp => {
+            for item in value.try_iter()? {
+                let (secs, nanos) = wellknown::datetime_to_parts(py, &item?)?;
+                write_parts_field(buf, number, secs, nanos);
+            }
+        }
+        FieldKind::Duration => {
+            for item in value.try_iter()? {
+                let (secs, nanos) = wellknown::timedelta_to_parts(&item?)?;
+                write_parts_field(buf, number, secs, nanos);
+            }
+        }
         FieldKind::Map { .. } => unreachable!("maps handled separately"),
     }
     Ok(())
@@ -218,6 +247,14 @@ fn encode_map(
                 encode_message_value(py, &v, &mut nested, depth)?;
                 wire::write_tag(&mut entry, 2, wire::WireType::Len);
                 wire::write_len_delimited(&mut entry, &nested);
+            }
+            MapValue::Timestamp => {
+                let (secs, nanos) = wellknown::datetime_to_parts(py, &v)?;
+                write_parts_field(&mut entry, 2, secs, nanos);
+            }
+            MapValue::Duration => {
+                let (secs, nanos) = wellknown::timedelta_to_parts(&v)?;
+                write_parts_field(&mut entry, 2, secs, nanos);
             }
         }
         wire::write_tag(buf, number, wire::WireType::Len);
@@ -309,7 +346,10 @@ fn is_default(kind: &FieldKind, value: &Bound<'_, PyAny>) -> PyResult<bool> {
             ScalarType::Bytes => Ok(value.extract::<Vec<u8>>()?.is_empty()),
             _ => Ok(value.extract::<i128>()? == 0),
         },
-        // Messages are always Optional; maps are handled separately.
-        FieldKind::Message | FieldKind::Map { .. } => Ok(false),
+        // Message-like fields are always Optional; maps are handled separately.
+        FieldKind::Message
+        | FieldKind::Timestamp
+        | FieldKind::Duration
+        | FieldKind::Map { .. } => Ok(false),
     }
 }

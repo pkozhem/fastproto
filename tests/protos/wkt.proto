@@ -1,0 +1,13 @@
+syntax = "proto3";
+package wkt;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/wrappers.proto";
+
+// Structural well-known types resolve to fastproto.wellknown classes.
+message Payload {
+  google.protobuf.Struct meta = 1;
+  google.protobuf.Any extra = 2;
+  google.protobuf.Int32Value score = 3;
+}

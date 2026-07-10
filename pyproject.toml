@@ -48,7 +48,10 @@ build-backend = "maturin"
 [tool.ruff]
 target-version = "py312"
 src = ["python", "tests", "scripts"]
-extend-exclude = ["tests/generated"] # @generated code is not ours to lint
+extend-exclude = [
+    "tests/generated",              # @generated code is not ours to lint
+    "python/fastproto/wellknown.py", # @generated (ships in the wheel)
+]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -88,6 +91,5 @@ python-version = "3.12"
 
 [tool.ty.src]
 include = ["python", "tests", "scripts"]
-exclude = [
-    "tests/generated",
-] # @generated; type-checked transitively when imported
+# @generated; type-checked transitively when imported
+exclude = ["tests/generated", "python/fastproto/wellknown.py"]

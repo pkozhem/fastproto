@@ -1,0 +1,14 @@
+syntax = "proto3";
+package common;
+
+enum Country {
+  COUNTRY_UNSPECIFIED = 0;
+  COUNTRY_CZ = 1;
+  COUNTRY_DE = 2;
+}
+
+message Address {
+  string city = 1;
+  string street = 2;
+  Country country = 3;
+}

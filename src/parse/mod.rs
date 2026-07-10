@@ -40,6 +40,9 @@ impl From<WireError> for ParseError {
 
 // FieldDescriptorProto.Label
 const LABEL_REPEATED: i64 = 3;
+// Well-known types surfaced as native Python objects (datetime / timedelta).
+const TIMESTAMP_FULL_NAME: &str = ".google.protobuf.Timestamp";
+const DURATION_FULL_NAME: &str = ".google.protobuf.Duration";
 // FieldDescriptorProto.Type
 const TYPE_GROUP: i64 = 10;
 const TYPE_MESSAGE: i64 = 11;
@@ -139,13 +142,20 @@ fn parse_nested_map_entry(bytes: &[u8]) -> Result<Option<(String, MapEntry)>, Pa
                 } else if raw.number == 2 {
                     value = Some(match type_code {
                         TYPE_ENUM => MapValue::Enum,
-                        TYPE_MESSAGE => MapValue::Message,
+                        TYPE_MESSAGE => match raw.type_name.as_deref() {
+                            Some(TIMESTAMP_FULL_NAME) => MapValue::Timestamp,
+                            Some(DURATION_FULL_NAME) => MapValue::Duration,
+                            _ => MapValue::Message,
+                        },
                         other => MapValue::Scalar(
                             scalar_from_proto_type(other)
                                 .ok_or(ParseError::UnsupportedType(other as i32))?,
                         ),
                     });
-                    value_type_name = raw.type_name.as_deref().map(short_name);
+                    value_type_name = match value {
+                        Some(MapValue::Timestamp | MapValue::Duration) => None,
+                        _ => raw.type_name.as_deref().map(short_name),
+                    };
                 }
             }
             (7, WireType::Len) => {
@@ -210,7 +220,12 @@ fn interpret_field(
 
     let (kind, type_name) = match type_code {
         TYPE_ENUM => (FieldKind::Enum, raw.type_name.as_deref().map(short_name)),
-        TYPE_MESSAGE => (FieldKind::Message, raw.type_name.as_deref().map(short_name)),
+        TYPE_MESSAGE => match raw.type_name.as_deref() {
+            // Native well-known types: no Python class to link (type_name None).
+            Some(TIMESTAMP_FULL_NAME) => (FieldKind::Timestamp, None),
+            Some(DURATION_FULL_NAME) => (FieldKind::Duration, None),
+            _ => (FieldKind::Message, raw.type_name.as_deref().map(short_name)),
+        },
         TYPE_GROUP => return Err(ParseError::UnsupportedType(TYPE_GROUP as i32)),
         other => {
             let scalar =
@@ -226,7 +241,7 @@ fn interpret_field(
     let label = if is_repeated {
         Label::Repeated
     } else if raw.proto3_optional
-        || matches!(kind, FieldKind::Message)
+        || matches!(kind, FieldKind::Message | FieldKind::Timestamp | FieldKind::Duration)
         || real_oneof.is_some()
     {
         Label::Optional

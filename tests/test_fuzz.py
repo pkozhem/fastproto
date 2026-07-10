@@ -13,6 +13,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from fastproto._core import compile_descriptor
+from tests.generated.event_pb import Event
 from tests.generated.rich_pb import User
 from tests.generated.tree_pb import Node
 
@@ -31,6 +32,13 @@ def test_decode_arbitrary_bytes_never_crashes(data: bytes) -> None:
 def test_decode_recursive_type_never_crashes(data: bytes) -> None:
     with suppress(*DECODE_ERRORS):
         Node.from_bytes(data)
+
+
+@given(st.binary(max_size=512))
+@settings(max_examples=300)
+def test_decode_datetime_fields_never_crashes(data: bytes) -> None:
+    with suppress(*DECODE_ERRORS, OverflowError):  # datetime range is finite
+        Event.from_bytes(data)
 
 
 @given(st.binary(max_size=512))

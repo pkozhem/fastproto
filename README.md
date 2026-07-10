@@ -148,6 +148,11 @@ it type-checks as the base type while still recording the exact wire type.
 Composite fields: `repeated T` → `list[T]`, `map<K, V>` → `dict[K, V]`,
 `enum` → `IntEnum`, and `optional` / message / `oneof` fields → `T | None`.
 
+Well-known types map to native objects: `google.protobuf.Timestamp` → `datetime`,
+`Duration` → `timedelta`; the rest (`Any`, `Struct`, wrappers, ...) are plain
+dataclasses in `fastproto.wellknown`. Multi-file schemas work — `import` in a
+`.proto` becomes an import between the generated modules.
+
 ## Semantics
 
 - **Presence (proto3):** plain scalars use their zero value and are not nullable;
@@ -163,6 +168,8 @@ Composite fields: `repeated T` → `list[T]`, `map<K, V>` → `dict[K, V]`,
   `__init__` / `repr` / `==`.
 - **Nesting limit:** messages deeper than 100 levels — or a cyclic object graph
   on encode — raise `ValueError` instead of exhausting the stack.
+- **Timestamps:** decoded `datetime`s are aware UTC; naive ones encode as UTC.
+  protobuf's sub-microsecond precision (nanos) is truncated to microseconds.
 - **References:** sibling, self, and enum references resolve lazily on the first
   `to_bytes()` / `from_bytes()` — nothing for you to wire up.
 

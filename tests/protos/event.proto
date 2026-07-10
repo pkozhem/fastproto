@@ -1,0 +1,15 @@
+syntax = "proto3";
+package event;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// Native well-known types: Timestamp fields surface as `datetime`, Duration
+// fields as `timedelta`.
+message Event {
+  string name = 1;
+  google.protobuf.Timestamp created_at = 2;
+  google.protobuf.Duration ttl = 3;
+  repeated google.protobuf.Timestamp reminders = 4;
+  map<string, google.protobuf.Timestamp> checkpoints = 5;
+}

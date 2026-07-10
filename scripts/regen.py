@@ -2,8 +2,8 @@
 
 Dev-only helper (never imported by the test suite). Runs protoc to produce the
 ``FileDescriptorSet`` fixtures, then drives the plugin in-process to (re)write
-``tests/generated/*_pb.py`` and the raw ``DescriptorProto`` fixture. Run it
-after changing a ``.proto`` under ``tests/protos`` or the code generator:
+``tests/generated/*_pb.py``. Run it after changing a ``.proto`` under
+``tests/protos`` or the code generator:
 
     python scripts/regen.py
 """
@@ -21,24 +21,64 @@ ROOT = Path(__file__).resolve().parent.parent
 PROTOS = ROOT / "tests" / "protos"
 FIXTURES = ROOT / "tests" / "fixtures"
 GENERATED = ROOT / "tests" / "generated"
+WELLKNOWN_PY = ROOT / "python" / "fastproto" / "wellknown.py"
 
-PROTO_FILES = ["rich.proto", "scalars.proto", "tree.proto"]
+# One unit = one .fds fixture (with the full import closure) plus the proto
+# files generated from it. Multi-file units exercise cross-file imports.
+UNITS: list[tuple[str, list[str]]] = [
+    ("rich", ["rich.proto"]),
+    ("scalars", ["scalars.proto"]),
+    ("tree", ["tree.proto"]),
+    ("profile", ["common.proto", "profile.proto"]),
+    ("event", ["event.proto"]),
+    ("wkt", ["wkt.proto"]),
+]
 
 
-def _fds_path(proto: str) -> Path:
-    return FIXTURES / f"{proto.removesuffix('.proto')}.fds"
-
-
-def _run_protoc(proto: str) -> None:
+def _run_protoc(fds: Path, protos: list[str]) -> None:
     subprocess.run(
         [
             "protoc",
             f"--proto_path={PROTOS}",
-            f"--descriptor_set_out={_fds_path(proto)}",
-            proto,
+            "--include_imports",
+            f"--descriptor_set_out={fds}",
+            *protos,
         ],
         check=True,
     )
+
+
+def _generate(fds: Path, to_generate: list[str]) -> None:
+    fileset = FileDescriptorSet.FromString(fds.read_bytes())
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=to_generate,
+        proto_file=fileset.file,
+    )
+    response = plugin.generate(request)
+    if response.error:
+        sys.exit(f"plugin error: {response.error}")
+    for generated in response.file:
+        (GENERATED / Path(generated.name).name).write_text(generated.content)
+
+
+def _regen_wellknown() -> None:
+    """(Re)write the bundled ``fastproto/wellknown.py`` and its .fds fixture.
+
+    protoc resolves ``google/protobuf/*.proto`` from its own bundled include
+    path, so no ``--proto_path`` is needed.
+    """
+    fds = FIXTURES / "wellknown.fds"
+    subprocess.run(
+        [
+            "protoc",
+            "--include_imports",
+            f"--descriptor_set_out={fds}",
+            *plugin.WELLKNOWN_PROTOS,
+        ],
+        check=True,
+    )
+    fileset = FileDescriptorSet.FromString(fds.read_bytes())
+    WELLKNOWN_PY.write_text(plugin.generate_wellknown(fileset.file))
 
 
 def main() -> None:
@@ -47,17 +87,13 @@ def main() -> None:
     GENERATED.mkdir(exist_ok=True)
     (GENERATED / "__init__.py").write_text("")
 
-    for proto in PROTO_FILES:
-        _run_protoc(proto)
-        fileset = FileDescriptorSet.FromString(_fds_path(proto).read_bytes())
-        request = plugin_pb2.CodeGeneratorRequest(
-            file_to_generate=[proto],
-            proto_file=fileset.file,
-        )
-        for generated in plugin.generate(request).file:
-            (GENERATED / Path(generated.name).name).write_text(generated.content)
+    for unit, protos in UNITS:
+        fds = FIXTURES / f"{unit}.fds"
+        _run_protoc(fds, protos)
+        _generate(fds, protos)
 
-    sys.stdout.write("Regenerated fixtures under tests/.\n")
+    _regen_wellknown()
+    sys.stdout.write("Regenerated fixtures under tests/ and fastproto/wellknown.py.\n")
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyType};
 
 use crate::descriptor::{FieldKind, Label, MapValue, MessageDescriptor, ScalarType, MAX_DEPTH};
 use crate::message::Descriptor;
+use crate::wellknown;
 use crate::wire::{self, Reader, WireError, WireType};
 
 type Refs = HashMap<u32, Py<PyAny>>;
@@ -100,6 +101,16 @@ pub fn decode_message<'py>(
                 let value = decode_message_value(py, refs.get(&number), sub, depth)?;
                 kwargs.set_item(field.name.as_str(), value)?;
             }
+            FieldKind::Timestamp => {
+                let sub = reader.read_len_delimited().map_err(wire_err)?;
+                let (secs, nanos) = wellknown::decode_parts(sub).map_err(wire_err)?;
+                kwargs.set_item(field.name.as_str(), wellknown::parts_to_datetime(py, secs, nanos)?)?;
+            }
+            FieldKind::Duration => {
+                let sub = reader.read_len_delimited().map_err(wire_err)?;
+                let (secs, nanos) = wellknown::decode_parts(sub).map_err(wire_err)?;
+                kwargs.set_item(field.name.as_str(), wellknown::parts_to_timedelta(py, secs, nanos)?)?;
+            }
         }
     }
 
@@ -165,6 +176,18 @@ fn decode_repeated<'py>(
                 reader.skip(wire_type).map_err(wire_err)?;
             }
         }
+        FieldKind::Timestamp | FieldKind::Duration => {
+            if wire_type == WireType::Len {
+                let sub = reader.read_len_delimited().map_err(wire_err)?;
+                let (secs, nanos) = wellknown::decode_parts(sub).map_err(wire_err)?;
+                list.append(match kind {
+                    FieldKind::Timestamp => wellknown::parts_to_datetime(py, secs, nanos)?,
+                    _ => wellknown::parts_to_timedelta(py, secs, nanos)?,
+                })?;
+            } else {
+                reader.skip(wire_type).map_err(wire_err)?;
+            }
+        }
         FieldKind::Map { .. } => unreachable!("maps handled separately"),
     }
     Ok(())
@@ -199,6 +222,14 @@ fn decode_map_entry<'py>(
                     let sub = reader.read_len_delimited().map_err(wire_err)?;
                     val_obj = Some(decode_message_value(py, class_ref, sub, depth)?);
                 }
+                MapValue::Timestamp | MapValue::Duration if wire == WireType::Len => {
+                    let sub = reader.read_len_delimited().map_err(wire_err)?;
+                    let (secs, nanos) = wellknown::decode_parts(sub).map_err(wire_err)?;
+                    val_obj = Some(match value_kind {
+                        MapValue::Timestamp => wellknown::parts_to_datetime(py, secs, nanos)?,
+                        _ => wellknown::parts_to_timedelta(py, secs, nanos)?,
+                    });
+                }
                 _ => reader.skip(wire).map_err(wire_err)?,
             },
             _ => reader.skip(wire).map_err(wire_err)?,
@@ -215,6 +246,8 @@ fn decode_map_entry<'py>(
             MapValue::Scalar(scalar) => scalar_default(py, *scalar)?,
             MapValue::Enum => coerce_enum(py, class_ref, 0)?,
             MapValue::Message => decode_message_value(py, class_ref, &[], depth)?,
+            MapValue::Timestamp => wellknown::parts_to_datetime(py, 0, 0)?,
+            MapValue::Duration => wellknown::parts_to_timedelta(py, 0, 0)?,
         },
     };
     Ok((key_obj, val_obj))

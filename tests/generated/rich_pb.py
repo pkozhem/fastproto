@@ -40,9 +40,9 @@ class User(Message):
     tags: list[Scalar.String] = field(default_factory=list)
     scores: list[Scalar.Int32] = field(default_factory=list)
     address: "Address | None" = None
-    past_addresses: list[Address] = field(default_factory=list)
+    past_addresses: "list[Address]" = field(default_factory=list)
     counters: dict[Scalar.String, Scalar.Int32] = field(default_factory=dict)
-    places: dict[Scalar.String, Address] = field(default_factory=dict)
-    roles: list[Role] = field(default_factory=list)
+    places: "dict[Scalar.String, Address]" = field(default_factory=dict)
+    roles: "list[Role]" = field(default_factory=list)
     phone: Scalar.String | None = None
     telegram: Scalar.String | None = None

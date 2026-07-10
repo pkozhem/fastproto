@@ -45,7 +45,9 @@ impl Descriptor {
                 FieldKind::Map { value, .. } => {
                     matches!(value, MapValue::Enum | MapValue::Message)
                 }
-                FieldKind::Scalar(_) => false,
+                // Native well-known types surface as datetime/timedelta —
+                // there is no generated class to link.
+                FieldKind::Scalar(_) | FieldKind::Timestamp | FieldKind::Duration => false,
             };
             if needs {
                 if let Some(name) = &f.type_name {

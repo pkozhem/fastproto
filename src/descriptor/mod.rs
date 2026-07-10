@@ -73,6 +73,10 @@ pub enum MapValue {
     Scalar(ScalarType),
     Enum,
     Message,
+    /// `google.protobuf.Timestamp`, surfaced as a Python `datetime`.
+    Timestamp,
+    /// `google.protobuf.Duration`, surfaced as a Python `timedelta`.
+    Duration,
 }
 
 /// What kind of value a field holds (independent of its cardinality).
@@ -88,6 +92,10 @@ pub enum FieldKind {
     /// A `map<K, V>` field. On the wire it is a repeated entry message with
     /// `key` = 1 and `value` = 2.
     Map { key: ScalarType, value: MapValue },
+    /// `google.protobuf.Timestamp`, surfaced as a Python `datetime`.
+    Timestamp,
+    /// `google.protobuf.Duration`, surfaced as a Python `timedelta`.
+    Duration,
 }
 
 /// One field of a message.

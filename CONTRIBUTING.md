@@ -69,6 +69,9 @@ uv run python scripts/regen.py
 
 The golden test in `tests/test_plugin.py` will fail if the committed output and
 the generator disagree, so always regenerate after touching the plugin.
+Descriptor bytes in fixtures can drift between `protoc` versions — if a regen
+produces unrelated hex churn, make sure your `protoc` matches the version the
+fixtures were last generated with.
 
 ## Commit messages
 
