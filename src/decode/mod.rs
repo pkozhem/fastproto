@@ -70,6 +70,26 @@ pub fn decode_message<'py>(
             }
         };
 
+        // For singular fields, a wire type that disagrees with the schema is
+        // treated as unknown (skipped and preserved) rather than mis-decoded.
+        // Repeated fields validate the wire type themselves in `decode_repeated`
+        // since they accept both packed and unpacked forms.
+        if field.label != Label::Repeated {
+            let expected = match &field.kind {
+                FieldKind::Scalar(scalar) => scalar.wire_type(),
+                FieldKind::Enum => WireType::Varint,
+                FieldKind::Message
+                | FieldKind::Timestamp
+                | FieldKind::Duration
+                | FieldKind::Map { .. } => WireType::Len,
+            };
+            if wire_type != expected {
+                reader.skip(wire_type).map_err(wire_err)?;
+                unknown.extend_from_slice(reader.raw_since(start));
+                continue;
+            }
+        }
+
         match &field.kind {
             FieldKind::Map { key, value } => {
                 let entry = reader.read_len_delimited().map_err(wire_err)?;
@@ -81,13 +101,6 @@ pub fn decode_message<'py>(
                 decode_repeated(py, &field.kind, refs.get(&number), wire_type, &mut reader, list, depth)?;
             }
             FieldKind::Scalar(scalar) => {
-                if wire_type != scalar.wire_type() {
-                    // Wire type disagrees with the schema: treat as unknown
-                    // rather than mis-decode, and keep the bytes.
-                    reader.skip(wire_type).map_err(wire_err)?;
-                    unknown.extend_from_slice(reader.raw_since(start));
-                    continue;
-                }
                 let value = decode_scalar(py, *scalar, &mut reader)?;
                 kwargs.set_item(field.name.as_str(), value)?;
             }

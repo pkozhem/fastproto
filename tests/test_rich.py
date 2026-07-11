@@ -89,6 +89,16 @@ def test_open_enum_in_repeated() -> None:
     assert User.from_bytes(user.to_bytes()).roles == [1, 99, 2]
 
 
+def test_wrong_wire_type_on_known_field_is_preserved_not_misdecoded() -> None:
+    # `role` (field 4, enum) expects a varint but arrives length-delimited.
+    # tag = (4<<3)|2 = 0x22, len 1, byte 0x63. The decoder must NOT read it as
+    # an enum (that would mis-decode); it skips it and preserves it as unknown.
+    data = b"\x22\x01\x63"
+    user = User.from_bytes(data)
+    assert user.role == Role.ROLE_UNSPECIFIED  # untouched, not mis-decoded
+    assert user.to_bytes() == data  # preserved verbatim as an unknown field
+
+
 def test_oneof_enforced() -> None:
     with pytest.raises(ValueError, match="oneof"):
         User(phone="a", telegram="b").to_bytes()
