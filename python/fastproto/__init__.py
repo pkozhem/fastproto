@@ -89,6 +89,20 @@ class Message:
         _ensure_linked(cls)
         return cls.__fastproto__.decode(cls, data)
 
+    def which_oneof(self, name: str) -> str | None:
+        """Return the set member of oneof group ``name``, or ``None`` if unset.
+
+        Mirrors google-protobuf's ``WhichOneof``: members are plain ``T | None``
+        fields, and this reports which one currently holds a value. Raises
+        :class:`ValueError` if ``name`` is not a oneof group of this message.
+        """
+        for group, members in self.__fastproto__.oneofs():
+            if group == name:
+                return next((m for m in members if getattr(self, m) is not None), None)
+        available = [group for group, _ in self.__fastproto__.oneofs()]
+        msg = f"{type(self).__name__!r} has no oneof group {name!r}; got {available}"
+        raise ValueError(msg)
+
 
 def _ensure_linked(cls: type[Message]) -> None:
     """Resolve enum/message references for ``cls`` and the classes it references.

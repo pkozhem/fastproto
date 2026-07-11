@@ -28,5 +28,6 @@ message User {
   oneof contact {
     string phone = 12;
     string telegram = 13;
+    Address postal = 14;
   }
 }
