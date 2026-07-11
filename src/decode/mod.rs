@@ -380,7 +380,7 @@ fn decode_scalar<'py>(
         ScalarType::String => {
             let bytes = reader.read_len_delimited().map_err(wire_err)?;
             let text = std::str::from_utf8(bytes).map_err(|_| {
-                pyo3::exceptions::PyUnicodeDecodeError::new_err("invalid utf-8 in string field")
+                pyo3::exceptions::PyValueError::new_err("invalid utf-8 in string field")
             })?;
             text.into_pyobject(py)?.into_any()
         }

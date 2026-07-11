@@ -78,7 +78,7 @@ fn enum_field() {
     let bytes = message_bytes("M", &[fb]);
     let desc = parse_message(&bytes).unwrap();
     assert_eq!(desc.fields[0].kind, FieldKind::Enum);
-    assert_eq!(desc.fields[0].type_name.as_deref(), Some("Role"));
+    assert_eq!(desc.fields[0].type_name.as_deref(), Some("demo.Role"));
     assert_eq!(desc.fields[0].label, Label::Single);
 }
 
@@ -90,7 +90,7 @@ fn message_field_is_optional() {
     let bytes = message_bytes("M", &[fb]);
     let desc = parse_message(&bytes).unwrap();
     assert_eq!(desc.fields[0].kind, FieldKind::Message);
-    assert_eq!(desc.fields[0].type_name.as_deref(), Some("Address"));
+    assert_eq!(desc.fields[0].type_name.as_deref(), Some("demo.Address"));
     assert_eq!(desc.fields[0].label, Label::Optional);
 }
 

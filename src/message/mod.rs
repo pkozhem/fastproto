@@ -35,8 +35,10 @@ impl Descriptor {
         self.linked
     }
 
-    /// `(field_number, short_type_name)` for every field that references
-    /// another class (enum, message, or a map with an enum/message value).
+    /// `(field_number, qualified_type_name)` for every field that references
+    /// another class (enum, message, or a map with an enum/message value). The
+    /// name is the full proto path (e.g. `pkg.Outer.Inner`); Python resolves it
+    /// against the generated module, walking into nested classes as needed.
     fn ref_fields(&self) -> Vec<(u32, String)> {
         let mut out = Vec::new();
         for f in &self.inner.fields {

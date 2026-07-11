@@ -1,0 +1,34 @@
+syntax = "proto3";
+package nested;
+
+message Outer {
+  enum Color {
+    COLOR_UNSPECIFIED = 0;
+    COLOR_RED = 1;
+    COLOR_GREEN = 2;
+  }
+
+  message Inner {
+    int32 x = 1;
+    Inner deeper = 2;  // self-reference within a nested type
+  }
+
+  message Mid {
+    message Leaf {  // two levels deep
+      string label = 1;
+    }
+    Leaf leaf = 1;
+    Color color = 2;  // sibling-scope enum: resolves to Outer.Color
+  }
+
+  Inner inner = 1;
+  Color color = 2;
+  Mid mid = 3;
+  repeated Inner inners = 4;
+  map<string, Inner> by_name = 5;
+}
+
+message Sibling {
+  Outer.Inner ref = 1;    // top-level message referencing a nested message
+  Outer.Color color = 2;  // and a nested enum
+}

@@ -104,6 +104,31 @@ class Message:
         raise ValueError(msg)
 
 
+def _resolve(namespace: dict[str, object], qualified: str) -> type:
+    """Look up a (possibly nested) type by its qualified proto name.
+
+    ``qualified`` is a full proto path minus the leading dot, e.g.
+    ``pkg.Outer.Inner``. The package prefix is not reflected in the module
+    namespace, and we can't tell from the name alone how many leading segments
+    are package versus enclosing message. So we try each suffix in turn — take
+    the first segment that names a module-level class, then walk the rest as
+    attributes (into nested classes) — and use the first chain that resolves.
+    """
+    parts = qualified.split(".")
+    for start in range(len(parts)):
+        obj = namespace.get(parts[start])
+        if obj is None:
+            continue
+        try:
+            for attr in parts[start + 1 :]:
+                obj = getattr(obj, attr)
+        except AttributeError:
+            continue
+        return cast("type", obj)
+    msg = f"cannot resolve referenced type {qualified!r}"
+    raise LookupError(msg)
+
+
 def _ensure_linked(cls: type[Message]) -> None:
     """Resolve enum/message references for ``cls`` and the classes it references.
 
@@ -121,7 +146,7 @@ def _ensure_linked(cls: type[Message]) -> None:
         return
 
     namespace = vars(sys.modules[cls.__module__])
-    resolved = {number: namespace[type_name] for number, type_name in references}
+    resolved = {number: _resolve(namespace, name) for number, name in references}
     descriptor.link(resolved)
 
     for target in resolved.values():
