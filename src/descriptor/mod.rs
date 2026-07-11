@@ -107,8 +107,10 @@ pub struct FieldDescriptor {
     pub name: String,
     pub kind: FieldKind,
     pub label: Label,
-    /// Short type name for enum/message fields (and a map's message/enum
-    /// value), e.g. `Address`. Used to resolve the Python class at link time.
+    /// Fully-qualified proto name (minus the leading dot) for enum/message
+    /// fields and a map's message/enum value, e.g. `pkg.Outer.Inner`. Used to
+    /// resolve the Python class at link time; the full path lets nested types
+    /// resolve unambiguously.
     pub type_name: Option<String>,
     /// Index into `MessageDescriptor::oneofs` if this is a real oneof member.
     pub oneof_index: Option<u32>,

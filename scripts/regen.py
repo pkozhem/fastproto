@@ -29,6 +29,7 @@ UNITS: list[tuple[str, list[str]]] = [
     ("rich", ["rich.proto"]),
     ("scalars", ["scalars.proto"]),
     ("tree", ["tree.proto"]),
+    ("nested", ["nested.proto"]),
     ("profile", ["common.proto", "profile.proto"]),
     ("event", ["event.proto"]),
     ("wkt", ["wkt.proto"]),

@@ -30,6 +30,10 @@ class _TypeInfo(NamedTuple):
     """Where a named type (message or enum) is defined."""
 
     file: str
+    # Dotted path within the defining module, with the package stripped, e.g.
+    # ``Outer.Inner`` for a nested type or ``Address`` for a top-level one. This
+    # is exactly how the type is referenced in generated annotations.
+    qualified: str
     message: DescriptorProto | None  # None for enums
 
 
@@ -85,20 +89,22 @@ def _index_types(files: Iterable[FileDescriptorProto]) -> dict[str, _TypeInfo]:
     index: dict[str, _TypeInfo] = {}
     for file in files:
         prefix = f".{file.package}" if file.package else ""
+        strip = len(prefix) + 1  # leading `.pkg.` (or just `.`) to drop
 
         def walk(
-            scope: str, messages: Iterable[DescriptorProto], file_name: str
+            scope: str, messages: Iterable[DescriptorProto], file_name: str, strip: int
         ) -> None:
             for msg in messages:
                 full_name = f"{scope}.{msg.name}"
-                index[full_name] = _TypeInfo(file_name, msg)
+                index[full_name] = _TypeInfo(file_name, full_name[strip:], msg)
                 for enum in msg.enum_type:
-                    index[f"{full_name}.{enum.name}"] = _TypeInfo(file_name, None)
-                walk(full_name, msg.nested_type, file_name)
+                    enum_full = f"{full_name}.{enum.name}"
+                    index[enum_full] = _TypeInfo(file_name, enum_full[strip:], None)
+                walk(full_name, msg.nested_type, file_name, strip)
 
         for enum in file.enum_type:
-            index[f"{prefix}.{enum.name}"] = _TypeInfo(file.name, None)
-        walk(prefix, file.message_type, file.name)
+            index[f"{prefix}.{enum.name}"] = _TypeInfo(file.name, enum.name, None)
+        walk(prefix, file.message_type, file.name, strip)
     return index
 
 
@@ -107,14 +113,35 @@ def _module_of(proto_name: str) -> str:
     return f"{proto_name.removesuffix('.proto')}_pb".replace("/", ".")
 
 
+def _all_messages(file: FileDescriptorProto) -> Iterable[DescriptorProto]:
+    """Every user-facing message in the file, nested ones included.
+
+    Synthetic ``map<>`` entry messages are skipped: they are an implementation
+    detail of the wire format, not types the user declared.
+    """
+
+    def walk(messages: Iterable[DescriptorProto]) -> Iterable[DescriptorProto]:
+        for msg in messages:
+            if msg.options.map_entry:
+                continue
+            yield msg
+            yield from walk(msg.nested_type)
+
+    yield from walk(file.message_type)
+
+
+def _qualified(field: FieldDescriptorProto, index: dict[str, _TypeInfo]) -> str:
+    """Module-local dotted path of a field's enum/message type, e.g. ``Outer.Inner``."""
+    info = index.get(field.type_name)
+    return info.qualified if info is not None else _short_name(field.type_name)
+
+
 def _referenced_type_names(
     file: FileDescriptorProto, index: dict[str, _TypeInfo]
 ) -> list[str]:
     """Full names of every message/enum referenced by this file's fields."""
     names: list[str] = []
-    for msg in file.message_type:
-        if msg.options.map_entry:
-            continue
+    for msg in _all_messages(file):
         for f in msg.field:
             entry = _map_entry(f, index)
             target = (
@@ -129,9 +156,7 @@ def _referenced_type_names(
 
 def _uses_scalar(file: FileDescriptorProto, index: dict[str, _TypeInfo]) -> bool:
     """Whether any generated annotation references a ``Scalar.*`` alias."""
-    for msg in file.message_type:
-        if msg.options.map_entry:
-            continue
+    for msg in _all_messages(file):
         for f in msg.field:
             if _map_entry(f, index) is not None:
                 return True  # map keys are always scalar
@@ -143,9 +168,7 @@ def _uses_scalar(file: FileDescriptorProto, index: dict[str, _TypeInfo]) -> bool
 def _native_names(file: FileDescriptorProto, index: dict[str, _TypeInfo]) -> list[str]:
     """Sorted stdlib names (datetime/timedelta) referenced by this file."""
     names: set[str] = set()
-    for msg in file.message_type:
-        if msg.options.map_entry:
-            continue
+    for msg in _all_messages(file):
         for f in msg.field:
             entry = _map_entry(f, index)
             target = (
@@ -165,18 +188,19 @@ def _external_imports(
 
     Emits ``try: from .x_pb import Y / except ImportError: from x_pb import Y``
     so generated modules work both inside a package and in a flat directory.
-    Raises :class:`_ShortNameCollisionError` when two visible types share a
-    short name (the annotations couldn't tell them apart).
+    Only the top-level container is imported; nested types are reached through
+    it (``Outer.Inner``). Raises :class:`_ShortNameCollisionError` when two
+    distinct top-level types share a name (the imports couldn't tell them apart).
     """
-    # short name -> full name, seeded with this file's own definitions.
-    seen: dict[str, str] = {}
-    prefix = f".{file.package}" if file.package else ""
+    # top-level name -> the `file:name` that owns it, seeded with this file's own
+    # top-level definitions.
+    owner: dict[str, str] = {}
     for enum in file.enum_type:
-        seen[enum.name] = f"{prefix}.{enum.name}"
+        owner[enum.name] = f"{file.name}:{enum.name}"
     for msg in file.message_type:
-        seen[msg.name] = f"{prefix}.{msg.name}"
+        owner[msg.name] = f"{file.name}:{msg.name}"
 
-    # module -> sorted set of class names to import from it.
+    # module -> sorted set of top-level names to import from it.
     by_module: dict[str, set[str]] = {}
     wellknown: set[str] = set()
 
@@ -184,18 +208,19 @@ def _external_imports(
         info = index.get(type_name)
         if info is None or info.file == file.name:
             return
-        short = _short_name(type_name)
-        if seen.setdefault(short, type_name) != type_name:
+        top = info.qualified.split(".")[0]
+        claimant = f"{info.file}:{top}"
+        if owner.setdefault(top, claimant) != claimant:
             msg = (
-                f"cannot generate {file.name}: both {seen[short]} and {type_name}"
-                f" would be imported as `{short}`"
+                f"cannot generate {file.name}: two different types would both be"
+                f" imported as `{top}` ({owner[top]} and {claimant})"
             )
             raise _ShortNameCollisionError(msg)
         if info.file.startswith("google/protobuf/"):
             # Structural well-known types ship inside the fastproto package.
-            wellknown.add(short)
+            wellknown.add(top)
         else:
-            by_module.setdefault(_module_of(info.file), set()).add(short)
+            by_module.setdefault(_module_of(info.file), set()).add(top)
 
     for type_name in _referenced_type_names(file, index):
         consider(type_name)
@@ -233,7 +258,9 @@ def _map_entry(
     return None
 
 
-def _element_annotation(field: FieldDescriptorProto) -> str:
+def _element_annotation(
+    field: FieldDescriptorProto, index: dict[str, _TypeInfo]
+) -> str:
     """Return the annotation for a single scalar/enum/message element."""
     if field.type in _SCALAR:
         return _SCALAR[field.type][0]
@@ -243,7 +270,7 @@ def _element_annotation(field: FieldDescriptorProto) -> str:
         FieldDescriptorProto.TYPE_ENUM,
         FieldDescriptorProto.TYPE_MESSAGE,
     ):
-        return _short_name(field.type_name)
+        return _qualified(field, index)
     return "object"  # group / unknown
 
 
@@ -285,62 +312,133 @@ def _render_field(field: FieldDescriptorProto, index: dict[str, _TypeInfo]) -> s
     if entry is not None:
         key_field = next(f for f in entry.field if f.number == _MAP_KEY_FIELD)
         value_field = next(f for f in entry.field if f.number == _MAP_VALUE_FIELD)
-        key, value = _element_annotation(key_field), _element_annotation(value_field)
+        key = _element_annotation(key_field, index)
+        value = _element_annotation(value_field, index)
         annotation = f"dict[{key}, {value}]"
         if _is_named_type(value_field):  # map keys are always scalar
             annotation = f'"{annotation}"'
         return f"{field.name}: {annotation} = field(default_factory=dict)"
 
     if field.label == FieldDescriptorProto.LABEL_REPEATED:
-        element = _element_annotation(field)
+        element = _element_annotation(field, index)
         annotation = f"list[{element}]"
         if _is_named_type(field):
             annotation = f'"{annotation}"'
         return f"{field.name}: {annotation} = field(default_factory=list)"
 
+    return _render_singular_field(field, index)
+
+
+def _render_enum_field(field: FieldDescriptorProto, index: dict[str, _TypeInfo]) -> str:
+    """Render a singular enum field.
+
+    A nested enum (``Outer.Color``) can't be named in the class body — the
+    enclosing class isn't defined yet — so its annotation is quoted and its
+    zero-value default is deferred to a factory that runs at instance creation.
+    Top-level enums stay eager and unquoted.
+    """
+    qual = _qualified(field, index)
+    nested = "." in qual
+    if _has_presence(field):
+        annotation = f'"{qual} | None"' if nested else f"{qual} | None"
+        return f"{field.name}: {annotation} = None"
+    if nested:
+        return f'{field.name}: "{qual}" = field(default_factory=lambda: {qual}(0))'
+    return f"{field.name}: {qual} = {qual}(0)"
+
+
+def _render_singular_field(
+    field: FieldDescriptorProto, index: dict[str, _TypeInfo]
+) -> str:
+    """Render a non-repeated, non-map field line."""
     if field.type_name in _NATIVE_WKT:
         # Native well-known type: plain stdlib object with presence.
         return f"{field.name}: {_NATIVE_WKT[field.type_name]} | None = None"
 
     if field.type == FieldDescriptorProto.TYPE_MESSAGE:
         # Message fields always carry presence.
-        return f'{field.name}: "{_short_name(field.type_name)} | None" = None'
+        return f'{field.name}: "{_qualified(field, index)} | None" = None'
 
     if field.type == FieldDescriptorProto.TYPE_ENUM:
-        annotation = _short_name(field.type_name)
-        default = f"{annotation}(0)"
-    else:
-        annotation, default = _SCALAR[field.type]
+        return _render_enum_field(field, index)
 
+    annotation, default = _SCALAR[field.type]
     if _has_presence(field):
         return f"{field.name}: {annotation} | None = None"
     return f"{field.name}: {annotation} = {default}"
 
 
-def _render_enum(enum: EnumDescriptorProto) -> str:
-    """Render an enum as an ``IntEnum`` subclass."""
-    body = [f"    {value.name} = {value.number}" for value in enum.value]
-    return "\n".join([f"class {enum.name}(IntEnum):", *(body or ["    pass"])])
+def _render_enum(enum: EnumDescriptorProto, indent: int = 0) -> str:
+    """Render an enum as an ``IntEnum`` subclass, indented for nesting."""
+    pad = "    " * indent
+    body = [f"{pad}    {value.name} = {value.number}" for value in enum.value]
+    header = f"{pad}class {enum.name}(IntEnum):"
+    return "\n".join([header, *(body or [f"{pad}    pass"])])
 
 
-def _render_message(msg: DescriptorProto, index: dict[str, _TypeInfo]) -> str:
-    """Render a message as its descriptor constant plus a decorated dataclass."""
-    const = f"_{msg.name.upper()}_DESCRIPTOR"
-    descriptor_hex = msg.SerializeToString().hex()
-    fields = [f"    {_render_field(f, index)}" for f in msg.field]
-    return "\n".join(
-        [
-            f"{const} = bytes.fromhex(  # @generated",
-            f'    "{descriptor_hex}"',
-            ")",
-            "",
-            "",
-            f"@message({const})",
-            "@dataclass(slots=True)",
-            f"class {msg.name}(Message):",
-            *(fields or ["    pass"]),
-        ],
-    )
+def _descriptor_const_name(qualified: str) -> str:
+    """Descriptor constant name: ``Outer.Inner`` -> ``_OUTER_INNER_DESCRIPTOR``."""
+    return f"_{qualified.replace('.', '_').upper()}_DESCRIPTOR"
+
+
+def _collect_constants(
+    msg: DescriptorProto, full_name: str, index: dict[str, _TypeInfo]
+) -> list[str]:
+    """Descriptor constants for ``msg`` and its nested messages, outermost first.
+
+    The constants live at module level (even for nested classes) so a class
+    body can reference its own constant, which is defined just above it.
+    """
+    const = _descriptor_const_name(index[full_name].qualified)
+    blocks = [
+        "\n".join(
+            [
+                f"{const} = bytes.fromhex(  # @generated",
+                f'    "{msg.SerializeToString().hex()}"',
+                ")",
+            ]
+        )
+    ]
+    for nested in msg.nested_type:
+        if not nested.options.map_entry:
+            blocks += _collect_constants(nested, f"{full_name}.{nested.name}", index)
+    return blocks
+
+
+def _render_class(
+    msg: DescriptorProto, full_name: str, index: dict[str, _TypeInfo], indent: int
+) -> str:
+    """Render one message class, recursing into nested enums and messages."""
+    pad = "    " * indent
+    inner = pad + "    "
+    const = _descriptor_const_name(index[full_name].qualified)
+    header = [
+        f"{pad}@message({const})",
+        f"{pad}@dataclass(slots=True)",
+        f"{pad}class {msg.name}(Message):",
+    ]
+    members = [_render_enum(enum, indent + 1) for enum in msg.enum_type]
+    members += [
+        _render_class(nested, f"{full_name}.{nested.name}", index, indent + 1)
+        for nested in msg.nested_type
+        if not nested.options.map_entry
+    ]
+    fields = [f"{inner}{_render_field(f, index)}" for f in msg.field]
+    body = [*members]
+    if fields:
+        body.append("\n".join(fields))
+    if not body:
+        body = [f"{inner}pass"]
+    return "\n".join(header) + "\n" + "\n\n".join(body)
+
+
+def _render_message(
+    msg: DescriptorProto, full_name: str, index: dict[str, _TypeInfo]
+) -> str:
+    """Render a message: its descriptor constants plus the decorated class tree."""
+    constants = _collect_constants(msg, full_name, index)
+    class_src = _render_class(msg, full_name, index, 0)
+    return "\n\n\n".join([*constants, class_src])
 
 
 def _render_header(
@@ -350,11 +448,15 @@ def _render_header(
     natives: list[str],
 ) -> str:
     """Render the module header: banner, imports, and cross-file imports."""
+    # `field(...)` is emitted for repeated/map fields (default_factory) and for
+    # nested-enum singular fields (a deferred zero-value factory).
     needs_field = any(
         f.label == FieldDescriptorProto.LABEL_REPEATED
-        for msg in file.message_type
+        or (f.type == FieldDescriptorProto.TYPE_ENUM and "." in _qualified(f, index))
+        for msg in _all_messages(file)
         for f in msg.field
     )
+    has_enum = bool(file.enum_type) or any(m.enum_type for m in _all_messages(file))
     dataclass_import = (
         "from dataclasses import dataclass, field"
         if needs_field
@@ -371,7 +473,7 @@ def _render_header(
     lines.append(dataclass_import)
     if natives:
         lines.append(f"from datetime import {', '.join(natives)}")
-    if file.enum_type:
+    if has_enum:
         lines.append("from enum import IntEnum")
     names = (
         "Message, Scalar, message" if _uses_scalar(file, index) else "Message, message"
@@ -384,9 +486,10 @@ def _render_header(
 
 def _file_blocks(file: FileDescriptorProto, index: dict[str, _TypeInfo]) -> list[str]:
     """Enum and message blocks of one proto file (no header)."""
+    prefix = f".{file.package}" if file.package else ""
     blocks = [_render_enum(enum) for enum in file.enum_type]
     blocks += [
-        _render_message(msg, index)
+        _render_message(msg, f"{prefix}.{msg.name}", index)
         for msg in file.message_type
         if not msg.options.map_entry  # synthetic map entries are not user-facing
     ]

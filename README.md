@@ -152,6 +152,9 @@ No `SerializeToString()` / `ParseFromString()` ceremony and no reflection — ju
   `Duration` → `timedelta`; the rest (`Any`, `Struct`, wrappers, ...) are plain
   dataclasses in `fastproto.wellknown`.
 
+- Nested `message` / `enum` definitions generate as nested classes at any depth
+  (`Outer.Inner`, `Outer.Color`), so the Python structure mirrors the `.proto`.
+
 - Multi-file schemas work — `import` in a`.proto` becomes an import between the
   generated modules.
 

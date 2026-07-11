@@ -76,9 +76,18 @@ fn read_string(reader: &mut Reader<'_>) -> Result<String, ParseError> {
         .map_err(|_| ParseError::InvalidUtf8)
 }
 
-/// `.pkg.Outer.Inner` -> `Inner`.
+/// `.pkg.Outer.Inner` -> `Inner`. Used only to key the synthetic map-entry
+/// table, whose entries are stored under their unqualified `DescriptorProto`
+/// name.
 fn short_name(full: &str) -> String {
     full.rsplit('.').next().unwrap_or(full).to_string()
+}
+
+/// `.pkg.Outer.Inner` -> `pkg.Outer.Inner`. The name we hand to Python for
+/// linking: it keeps the full path (including any enclosing messages) so nested
+/// types resolve unambiguously, dropping only protobuf's leading dot.
+fn full_name(full: &str) -> String {
+    full.strip_prefix('.').unwrap_or(full).to_string()
 }
 
 /// Raw fields collected from a `FieldDescriptorProto` before interpretation.
@@ -154,7 +163,7 @@ fn parse_nested_map_entry(bytes: &[u8]) -> Result<Option<(String, MapEntry)>, Pa
                     });
                     value_type_name = match value {
                         Some(MapValue::Timestamp | MapValue::Duration) => None,
-                        _ => raw.type_name.as_deref().map(short_name),
+                        _ => raw.type_name.as_deref().map(full_name),
                     };
                 }
             }
@@ -219,12 +228,12 @@ fn interpret_field(
     }
 
     let (kind, type_name) = match type_code {
-        TYPE_ENUM => (FieldKind::Enum, raw.type_name.as_deref().map(short_name)),
+        TYPE_ENUM => (FieldKind::Enum, raw.type_name.as_deref().map(full_name)),
         TYPE_MESSAGE => match raw.type_name.as_deref() {
             // Native well-known types: no Python class to link (type_name None).
             Some(TIMESTAMP_FULL_NAME) => (FieldKind::Timestamp, None),
             Some(DURATION_FULL_NAME) => (FieldKind::Duration, None),
-            _ => (FieldKind::Message, raw.type_name.as_deref().map(short_name)),
+            _ => (FieldKind::Message, raw.type_name.as_deref().map(full_name)),
         },
         TYPE_GROUP => return Err(ParseError::UnsupportedType(TYPE_GROUP as i32)),
         other => {
