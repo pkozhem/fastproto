@@ -162,7 +162,8 @@ No `SerializeToString()` / `ParseFromString()` ceremony and no reflection — ju
   track explicit presence (a set empty string is distinct from unset). An
   all-default message encodes to `b""`.
 - **`oneof`:** members are plain optional fields; setting more than one raises
-  `ValueError` at encode time.
+  `ValueError` at encode time. `msg.which_oneof("group")` returns the name of the
+  set member (or `None`), like google's `WhichOneof`.
 - **Open enums (proto3):** an enum value not defined in your schema decodes to a
   plain `int` (like google's runtime) and survives re-encoding.
 - **Unknown fields:** fields your schema doesn't know are preserved verbatim
@@ -178,6 +179,7 @@ No `SerializeToString()` / `ParseFromString()` ceremony and no reflection — ju
 ```python
 empty = User()
 assert empty.to_bytes() == b"" and empty.email is None
+assert User(phone="1").which_oneof("contact") == "phone"
 User(phone="1", telegram="a").to_bytes()  # ValueError: ... oneof ...
 ```
 

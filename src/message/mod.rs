@@ -58,6 +58,26 @@ impl Descriptor {
         out
     }
 
+    /// `{oneof_group_name: [member_field_name, ...]}` for every real oneof.
+    ///
+    /// Members are listed in field-declaration order. Synthetic single-member
+    /// groups that protoc generates for proto3 `optional` are already excluded
+    /// by the parser, so only user-written `oneof` groups appear here.
+    fn oneofs(&self) -> Vec<(String, Vec<String>)> {
+        let mut groups: Vec<(String, Vec<String>)> = self
+            .inner
+            .oneofs
+            .iter()
+            .map(|name| (name.clone(), Vec::new()))
+            .collect();
+        for f in &self.inner.fields {
+            if let Some(idx) = f.oneof_index {
+                groups[idx as usize].1.push(f.name.clone());
+            }
+        }
+        groups
+    }
+
     /// Store resolved `{field_number: class}` references and mark linked.
     fn link(&mut self, mapping: &Bound<'_, PyDict>) -> PyResult<()> {
         for (k, v) in mapping.iter() {

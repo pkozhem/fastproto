@@ -106,6 +106,22 @@ def test_oneof_enforced() -> None:
     assert User.from_bytes(User(telegram="t").to_bytes()).telegram == "t"
 
 
+def test_which_oneof() -> None:
+    # nothing set -> no member
+    assert User(name="x").which_oneof("contact") is None
+    # a scalar member
+    assert User(phone="p").which_oneof("contact") == "phone"
+    # a message member, surviving a round-trip
+    decoded = User.from_bytes(User(postal=Address(city="C")).to_bytes())
+    assert decoded.which_oneof("contact") == "postal"
+    assert decoded.postal == Address(city="C")
+
+
+def test_which_oneof_unknown_group() -> None:
+    with pytest.raises(ValueError, match="no oneof group 'nope'"):
+        User(name="x").which_oneof("nope")
+
+
 def test_wire_compatible_with_reference() -> None:
     """Our bytes must be readable by google's protobuf, and vice versa."""
     pytest.importorskip("google.protobuf")
