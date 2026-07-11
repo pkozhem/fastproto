@@ -55,6 +55,11 @@ message User {
   repeated string tags = 5;
   Address address = 6;
   map<string, int32> counters = 7;
+
+  oneof contact {
+    string phone = 8;
+    string telegram = 9;
+  }
 }
 ```
 
@@ -105,6 +110,8 @@ class User(Message):
     tags: list[Scalar.String] = field(default_factory=list)
     address: "Address | None" = None
     counters: dict[Scalar.String, Scalar.Int32] = field(default_factory=dict)
+    phone: Scalar.String | None = None
+    telegram: Scalar.String | None = None
 ```
 
 **3. Use it** like any dataclass:
@@ -155,7 +162,7 @@ No `SerializeToString()` / `ParseFromString()` ceremony and no reflection — ju
 - Nested `message` / `enum` definitions generate as nested classes at any depth
   (`Outer.Inner`, `Outer.Color`), so the Python structure mirrors the `.proto`.
 
-- Multi-file schemas work — `import` in a`.proto` becomes an import between the
+- Multi-file schemas work — `import` in a `.proto` becomes an import between the
   generated modules.
 
 ## Semantics
@@ -176,8 +183,8 @@ No `SerializeToString()` / `ParseFromString()` ceremony and no reflection — ju
   on encode — raise `ValueError` instead of exhausting the stack.
 - **Timestamps:** decoded `datetime`s are aware UTC; naive ones encode as UTC.
   protobuf's sub-microsecond precision (nanos) is truncated to microseconds.
-- **References:** sibling, self, and enum references resolve lazily on the first
-  `to_bytes()` / `from_bytes()` — nothing for you to wire up.
+- **References:** sibling, self, nested, and enum references resolve lazily on the
+  first `to_bytes()` / `from_bytes()` — nothing for you to wire up.
 
 ```python
 empty = User()
