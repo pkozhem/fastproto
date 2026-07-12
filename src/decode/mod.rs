@@ -329,7 +329,9 @@ fn decode_message_value<'py>(
     })?;
     let desc_ref = desc.borrow();
     let ty = cls.downcast::<PyType>()?;
-    decode_message(py, ty, &desc_ref.inner, &desc_ref.refs, data, depth + 1)
+    let empty = HashMap::new();
+    let refs = desc_ref.refs.get().unwrap_or(&empty);
+    decode_message(py, ty, &desc_ref.inner, refs, data, depth + 1)
 }
 
 /// The Python default object for a scalar (used for omitted map keys/values).

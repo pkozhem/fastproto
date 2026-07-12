@@ -6,8 +6,17 @@
 //! instance and recurses through its own `__fastproto__`. Only decoding needs
 //! to know which class to build, so those references are filled in lazily by
 //! the `message()` decorator once the whole module is defined (see `link`).
+//!
+//! `refs`/`linked` use interior mutability (`OnceLock` + `AtomicBool`) so that
+//! linking mutates through a shared `&self`. That keeps every method borrow as
+//! a shared borrow: a first-time `link` can never clash with a concurrent
+//! `is_linked` read or an in-flight `decode` (which would raise `PyBorrowError`
+//! under free-threading if linking took `&mut self`). Linking is idempotent —
+//! the first `OnceLock::set` wins and a racing second one is harmlessly dropped.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyType};
@@ -19,8 +28,9 @@ use crate::{decode, encode, parse};
 pub struct Descriptor {
     pub(crate) inner: MessageDescriptor,
     /// field number -> Python class (an `IntEnum` or a message dataclass).
-    pub(crate) refs: HashMap<u32, Py<PyAny>>,
-    pub(crate) linked: bool,
+    /// Written once by `link`; read by `decode`.
+    pub(crate) refs: OnceLock<HashMap<u32, Py<PyAny>>>,
+    pub(crate) linked: AtomicBool,
 }
 
 #[pymethods]
@@ -32,7 +42,7 @@ impl Descriptor {
 
     #[getter]
     fn is_linked(&self) -> bool {
-        self.linked
+        self.linked.load(Ordering::Acquire)
     }
 
     /// `(field_number, qualified_type_name)` for every field that references
@@ -81,12 +91,18 @@ impl Descriptor {
     }
 
     /// Store resolved `{field_number: class}` references and mark linked.
-    fn link(&mut self, mapping: &Bound<'_, PyDict>) -> PyResult<()> {
+    ///
+    /// Takes `&self` (interior mutability) so it never needs an exclusive borrow.
+    /// If two threads race the first link, the first `OnceLock::set` wins and the
+    /// other is dropped — both compute the same mapping, so the result is identical.
+    fn link(&self, mapping: &Bound<'_, PyDict>) -> PyResult<()> {
+        let mut refs = HashMap::with_capacity(mapping.len());
         for (k, v) in mapping.iter() {
             let num: u32 = k.extract()?;
-            self.refs.insert(num, v.unbind());
+            refs.insert(num, v.unbind());
         }
-        self.linked = true;
+        let _ = self.refs.set(refs);
+        self.linked.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -108,7 +124,9 @@ impl Descriptor {
         cls: &Bound<'py, PyType>,
         data: &[u8],
     ) -> PyResult<Bound<'py, PyAny>> {
-        decode::decode_message(py, cls, &self.inner, &self.refs, data, 0)
+        let empty = HashMap::new();
+        let refs = self.refs.get().unwrap_or(&empty);
+        decode::decode_message(py, cls, &self.inner, refs, data, 0)
     }
 }
 
@@ -118,7 +136,7 @@ pub fn compile(data: &[u8]) -> PyResult<Descriptor> {
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("bad descriptor: {e:?}")))?;
     Ok(Descriptor {
         inner,
-        refs: HashMap::new(),
-        linked: false,
+        refs: OnceLock::new(),
+        linked: AtomicBool::new(false),
     })
 }

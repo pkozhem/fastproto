@@ -176,9 +176,18 @@ No `SerializeToString()` / `ParseFromString()` ceremony and no reflection — ju
   set member (or `None`), like google's `WhichOneof`.
 - **Open enums (proto3):** an enum value not defined in your schema decodes to a
   plain `int` (like google's runtime) and survives re-encoding.
+- **Repeated message merge:** not performed. If a singular message field appears
+  more than once on the wire, the last occurrence wins (google merges the
+  submessages field-by-field). A wire-compat caveat for concatenated streams.
 - **Unknown fields:** fields your schema doesn't know are preserved verbatim
   across decode → encode (forward compatibility). They are invisible to
-  `__init__` / `repr` / `==`.
+  `__init__` / `repr` / `==`. Exception: proto2 `group` wire types can't be
+  skipped, so a message containing one raises `ValueError` on decode.
+- **Strict types at the boundary:** field values are taken as-is — `bool` does not
+  accept `int`, `str` and `bytes` don't interconvert, and a `repeated` field must
+  be a real list (a bare `str`/`bytes` is rejected, not iterated char-by-char). An
+  out-of-range integer raises `OverflowError` on encode. `from_bytes` takes
+  `bytes` (not yet `bytearray` / `memoryview`).
 - **Nesting limit:** messages deeper than 100 levels — or a cyclic object graph
   on encode — raise `ValueError` instead of exhausting the stack.
 - **Timestamps:** decoded `datetime`s are aware UTC; naive ones encode as UTC.
