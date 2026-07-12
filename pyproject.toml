@@ -56,9 +56,8 @@ extend-exclude = [
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
-    "COM812", # trailing commas are the formatter's job
-    "D203",   # incompatible with D211 (no blank line before class docstring)
-    "D213",   # incompatible with D212 (summary on the first line)
+    "D203", # incompatible with D211 (no blank line before class docstring)
+    "D213", # incompatible with D212 (summary on the first line)
 ]
 
 [tool.ruff.lint.pydocstyle]

@@ -85,7 +85,9 @@ def test_short_name_collision_is_reported() -> None:
 
 
 def _single_field_request(
-    *, syntax: str = "proto3", field_name: str = "value"
+    *,
+    syntax: str = "proto3",
+    field_name: str = "value",
 ) -> CodeGeneratorRequest:
     file = FileDescriptorProto(name="m.proto", package="m", syntax=syntax)
     msg = file.message_type.add(name="M")
@@ -120,3 +122,41 @@ def test_non_proto3_is_reported() -> None:
     response = plugin.generate(_single_field_request(syntax="proto2"))
     assert "proto3" in response.error
     assert not response.file
+
+
+def test_slot_field_name_is_reported() -> None:
+    # `_fastproto_unknown` is a real (underscore-leading) proto identifier that
+    # would shadow the hidden unknown-fields slot and break serialization.
+    response = plugin.generate(_single_field_request(field_name="_fastproto_unknown"))
+    assert "_fastproto_unknown" in response.error
+    assert not response.file
+
+
+@pytest.mark.parametrize("name", ["message", "field", "bytes", "Message", "Scalar"])
+def test_type_name_shadowing_infra_is_reported(name: str) -> None:
+    # A message/enum named like something the generated module relies on
+    # (the `@message` decorator, `bytes.fromhex`, `dataclasses.field`, ...).
+    file = FileDescriptorProto(name="s.proto", package="s", syntax="proto3")
+    file.message_type.add(name=name)
+    request = CodeGeneratorRequest(file_to_generate=["s.proto"], proto_file=[file])
+    response = plugin.generate(request)
+    assert name in response.error
+    assert not response.file
+
+
+def test_enum_member_reserved_by_python_enum_is_reported() -> None:
+    file = FileDescriptorProto(name="e.proto", package="e", syntax="proto3")
+    enum = file.enum_type.add(name="E")
+    enum.value.add(name="mro", number=0)  # `enum` rejects a member named `mro`
+    request = CodeGeneratorRequest(file_to_generate=["e.proto"], proto_file=[file])
+    response = plugin.generate(request)
+    assert "mro" in response.error
+    assert not response.file
+
+
+@pytest.mark.parametrize("name", ["message", "bytes", "data", "type"])
+def test_common_field_names_are_allowed(name: str) -> None:
+    # These are safe as fields and common in real schemas — must still generate.
+    response = plugin.generate(_single_field_request(field_name=name))
+    assert not response.error
+    assert response.file

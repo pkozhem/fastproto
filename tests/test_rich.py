@@ -148,6 +148,15 @@ def test_field_number_zero_is_rejected() -> None:
         User.from_bytes(b"\x00")
 
 
+def test_repeated_rejects_str_and_bytes() -> None:
+    # `str`/`bytes` are iterable, so `tags="abc"` would silently encode as three
+    # one-char entries. It must raise instead (the wrong type is deliberate).
+    with pytest.raises(TypeError, match="list"):
+        User(tags="abc").to_bytes()  # ty: ignore[invalid-argument-type]
+    # a genuine list is fine
+    assert User.from_bytes(User(tags=["a", "b"]).to_bytes()).tags == ["a", "b"]
+
+
 def test_wire_compatible_with_reference() -> None:
     """Our bytes must be readable by google's protobuf, and vice versa."""
     pytest.importorskip("google.protobuf")

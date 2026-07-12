@@ -6,7 +6,7 @@
 //! pre-resolved class references are needed here.
 
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyBytes, PyDict, PyString};
 
 use crate::descriptor::{FieldKind, Label, MapValue, MessageDescriptor, ScalarType, MAX_DEPTH};
 use crate::message::Descriptor;
@@ -159,6 +159,14 @@ fn encode_repeated(
     value: &Bound<'_, PyAny>,
     depth: usize,
 ) -> PyResult<()> {
+    // `str`/`bytes` are iterable, so without this guard `tags="abc"` would
+    // silently encode as three one-char entries. A repeated field must be a
+    // genuine sequence of elements.
+    if value.is_instance_of::<PyString>() || value.is_instance_of::<PyBytes>() {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "repeated field must be a list of elements, not a str/bytes",
+        ));
+    }
     match kind {
         FieldKind::Scalar(scalar) if scalar.is_packable() => {
             let mut packed = Vec::new();

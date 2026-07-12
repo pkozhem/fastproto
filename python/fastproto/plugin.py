@@ -46,10 +46,40 @@ class _InvalidSchemaError(Exception):
     """The schema can't be turned into valid, working Python (bad name / syntax)."""
 
 
-# Field names that would shadow the `fastproto.Message` API if used as
-# dataclass fields. (Proto identifiers can't start with `_`, so the private
-# `_fastproto_unknown` / `__fastproto__` slots are unreachable and omitted.)
-_RESERVED_FIELD_NAMES = frozenset({"to_bytes", "from_bytes", "which_oneof"})
+# Names the generated module reads at module scope: the runtime imports, the
+# `@message` / `@dataclass` decorators, and the `bytes.fromhex(...)` builtin. A
+# user *type* (message or enum) sharing one of these shadows it and breaks the
+# module (e.g. a `bytes` message breaks the next `bytes.fromhex`; a `message`
+# message shadows the decorator for later classes).
+_GENERATED_NAMES = frozenset(
+    {
+        "Message", "Scalar", "message",  # fastproto runtime
+        "dataclass", "field",  # dataclasses
+        "IntEnum",  # enum
+        "datetime", "timedelta",  # datetime (native well-known types)
+        "bytes",  # builtin, used as bytes.fromhex(...)
+    },
+)  # fmt: skip
+
+# Field names that break the runtime: the Message API, its private slots (proto
+# field names *may* start with `_`, so these are reachable), and the few infra
+# names the class body itself re-reads in annotations/defaults. (`message` and
+# `bytes` are safe and common as fields, so they are deliberately allowed.)
+_RESERVED_FIELD_NAMES = frozenset(
+    {
+        "to_bytes", "from_bytes", "which_oneof",  # Message API
+        "_fastproto_unknown", "__fastproto__",  # Message slots / descriptor
+        "field", "Scalar", "datetime", "timedelta",  # re-read in the class body
+    },
+)  # fmt: skip
+
+
+def _is_reserved_enum_member(name: str) -> bool:
+    """Whether Python's ``enum`` rejects ``name`` (``mro`` or a ``_sunder_``)."""
+    is_sunder = (
+        name.startswith("_") and name.endswith("_") and not name.startswith("__")
+    )
+    return name == "mro" or is_sunder
 
 
 # Field numbers of the synthetic map entry message (key, value).
@@ -103,7 +133,10 @@ def _index_types(files: Iterable[FileDescriptorProto]) -> dict[str, _TypeInfo]:
         strip = len(prefix) + 1  # leading `.pkg.` (or just `.`) to drop
 
         def walk(
-            scope: str, messages: Iterable[DescriptorProto], file_name: str, strip: int
+            scope: str,
+            messages: Iterable[DescriptorProto],
+            file_name: str,
+            strip: int,
         ) -> None:
             for msg in messages:
                 full_name = f"{scope}.{msg.name}"
@@ -148,7 +181,8 @@ def _qualified(field: FieldDescriptorProto, index: dict[str, _TypeInfo]) -> str:
 
 
 def _referenced_type_names(
-    file: FileDescriptorProto, index: dict[str, _TypeInfo]
+    file: FileDescriptorProto,
+    index: dict[str, _TypeInfo],
 ) -> list[str]:
     """Full names of every message/enum referenced by this file's fields."""
     names: list[str] = []
@@ -193,7 +227,8 @@ def _native_names(file: FileDescriptorProto, index: dict[str, _TypeInfo]) -> lis
 
 
 def _external_imports(
-    file: FileDescriptorProto, index: dict[str, _TypeInfo]
+    file: FileDescriptorProto,
+    index: dict[str, _TypeInfo],
 ) -> list[str]:
     """Dual-import lines for types this file references from other files.
 
@@ -270,7 +305,8 @@ def _map_entry(
 
 
 def _element_annotation(
-    field: FieldDescriptorProto, index: dict[str, _TypeInfo]
+    field: FieldDescriptorProto,
+    index: dict[str, _TypeInfo],
 ) -> str:
     """Return the annotation for a single scalar/enum/message element."""
     if field.type in _SCALAR:
@@ -359,7 +395,8 @@ def _render_enum_field(field: FieldDescriptorProto, index: dict[str, _TypeInfo])
 
 
 def _render_singular_field(
-    field: FieldDescriptorProto, index: dict[str, _TypeInfo]
+    field: FieldDescriptorProto,
+    index: dict[str, _TypeInfo],
 ) -> str:
     """Render a non-repeated, non-map field line."""
     if field.type_name in _NATIVE_WKT:
@@ -393,7 +430,9 @@ def _descriptor_const_name(qualified: str) -> str:
 
 
 def _collect_constants(
-    msg: DescriptorProto, full_name: str, index: dict[str, _TypeInfo]
+    msg: DescriptorProto,
+    full_name: str,
+    index: dict[str, _TypeInfo],
 ) -> list[str]:
     """Descriptor constants for ``msg`` and its nested messages, outermost first.
 
@@ -407,8 +446,8 @@ def _collect_constants(
                 f"{const} = bytes.fromhex(  # @generated",
                 f'    "{msg.SerializeToString().hex()}"',
                 ")",
-            ]
-        )
+            ],
+        ),
     ]
     for nested in msg.nested_type:
         if not nested.options.map_entry:
@@ -417,7 +456,10 @@ def _collect_constants(
 
 
 def _render_class(
-    msg: DescriptorProto, full_name: str, index: dict[str, _TypeInfo], indent: int
+    msg: DescriptorProto,
+    full_name: str,
+    index: dict[str, _TypeInfo],
+    indent: int,
 ) -> str:
     """Render one message class, recursing into nested enums and messages."""
     pad = "    " * indent
@@ -444,7 +486,9 @@ def _render_class(
 
 
 def _render_message(
-    msg: DescriptorProto, full_name: str, index: dict[str, _TypeInfo]
+    msg: DescriptorProto,
+    full_name: str,
+    index: dict[str, _TypeInfo],
 ) -> str:
     """Render a message: its descriptor constants plus the decorated class tree."""
     constants = _collect_constants(msg, full_name, index)
@@ -510,7 +554,10 @@ def _file_blocks(file: FileDescriptorProto, index: dict[str, _TypeInfo]) -> list
 def _generate_file(file: FileDescriptorProto, index: dict[str, _TypeInfo]) -> str:
     """Render the full ``<name>_pb.py`` source for one proto file."""
     header = _render_header(
-        file, index, _external_imports(file, index), _native_names(file, index)
+        file,
+        index,
+        _external_imports(file, index),
+        _native_names(file, index),
     )
     return "\n\n\n".join([header, *_file_blocks(file, index)]) + "\n"
 
@@ -571,22 +618,39 @@ def _check_identifier(file_name: str, name: str, what: str) -> None:
         raise _InvalidSchemaError(msg)
 
 
+def _check_type_name(file_name: str, name: str, what: str) -> None:
+    """Reject a message/enum name that isn't a valid identifier or shadows infra."""
+    _check_identifier(file_name, name, what)
+    if name in _GENERATED_NAMES:
+        msg = (
+            f"cannot generate {file_name}: {what} {name!r} shadows a name the"
+            " generated module depends on"
+        )
+        raise _InvalidSchemaError(msg)
+
+
 def _check_enum(file_name: str, enum: EnumDescriptorProto) -> None:
-    _check_identifier(file_name, enum.name, "enum")
+    _check_type_name(file_name, enum.name, "enum")
     for value in enum.value:
         _check_identifier(file_name, value.name, "enum value")
+        if _is_reserved_enum_member(value.name):
+            msg = (
+                f"cannot generate {file_name}: enum value {value.name!r} is"
+                " reserved by Python's enum"
+            )
+            raise _InvalidSchemaError(msg)
 
 
 def _check_message(file_name: str, msg: DescriptorProto) -> None:
     if msg.options.map_entry:
         return  # synthetic; never emitted as a class
-    _check_identifier(file_name, msg.name, "message")
+    _check_type_name(file_name, msg.name, "message")
     for f in msg.field:
         _check_identifier(file_name, f.name, "field")
         if f.name in _RESERVED_FIELD_NAMES:
             msg_text = (
-                f"cannot generate {file_name}: field {f.name!r} would shadow the"
-                " fastproto Message API"
+                f"cannot generate {file_name}: field {f.name!r} is reserved (would"
+                " break the generated module)"
             )
             raise _InvalidSchemaError(msg_text)
     for enum in msg.enum_type:
