@@ -71,12 +71,6 @@ impl<'a> Reader<'a> {
         &self.buf[start..self.pos]
     }
 
-    fn next_byte(&mut self) -> Result<u8, WireError> {
-        let b = *self.buf.get(self.pos).ok_or(WireError::UnexpectedEof)?;
-        self.pos += 1;
-        Ok(b)
-    }
-
     /// Read a base-128 varint as a raw u64.
     pub fn read_varint(&mut self) -> Result<u64, WireError> {
         let mut result: u64 = 0;
@@ -151,6 +145,12 @@ impl<'a> Reader<'a> {
             }
         }
         Ok(())
+    }
+
+    fn next_byte(&mut self) -> Result<u8, WireError> {
+        let b = *self.buf.get(self.pos).ok_or(WireError::UnexpectedEof)?;
+        self.pos += 1;
+        Ok(b)
     }
 }
 
