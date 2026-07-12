@@ -1,0 +1,117 @@
+name: lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Sync (build the extension + dev tools)
+        run: uv sync
+      - name: Lint
+        run: |
+          uv run ruff check python tests scripts
+          uv run ruff format --check python tests scripts
+
+  ty:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Sync (build the extension + dev tools)
+        run: uv sync
+      - name: Type check
+        run: uv run ty check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12" # pyo3 build needs an interpreter
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  rustfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Format check
+        run: cargo fmt --check
+
+  # Releases own the version (it lives in git tags and is set on the runner at
+  # release time), so a PR must never touch it. See release.yml.
+  version-guard:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Forbid version changes in Cargo.toml
+        run: |
+          base=$(git show '${{ github.event.pull_request.base.sha }}:Cargo.toml' \
+                 | grep -m1 '^version = ')
+          head=$(grep -m1 '^version = ' Cargo.toml)
+          if [ "$base" != "$head" ]; then
+            echo "::error::Do not change the version in Cargo.toml — releases bump it automatically (run the release workflow)."
+            echo "base: $base"
+            echo "head: $head"
+            exit 1
+          fi
+
+  # Single stable check name for branch protection. Gate on this instead of the
+  # individual lint jobs.
+  lints-pass:
+    if: always()
+    needs: [ruff, ty, clippy, rustfmt, version-guard]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs succeeded
+        run: |
+          if [ "${{ needs.ruff.result }}" != "success" ]; then
+            echo "ruff did not succeed"
+            exit 1
+          fi
+          if [ "${{ needs.ty.result }}" != "success" ]; then
+            echo "ty did not succeed"
+            exit 1
+          fi
+          if [ "${{ needs.clippy.result }}" != "success" ]; then
+            echo "clippy did not succeed"
+            exit 1
+          fi
+          if [ "${{ needs.rustfmt.result }}" != "success" ]; then
+            echo "rustfmt did not succeed"
+            exit 1
+          fi
+          # version-guard runs only on PRs; "skipped" (on push) is acceptable.
+          if [ "${{ needs.version-guard.result }}" != "success" ] \
+             && [ "${{ needs.version-guard.result }}" != "skipped" ]; then
+            echo "version-guard did not succeed"
+            exit 1
+          fi
