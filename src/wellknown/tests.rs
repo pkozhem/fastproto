@@ -5,8 +5,8 @@ fn wire_roundtrip() {
     for (secs, nanos) in [
         (0_i64, 0_i32),
         (1_720_620_000, 500),
-        (-1, 999_999_999),   // Timestamp just before the epoch
-        (-5, -500_000_000),  // negative Duration: same-sign parts
+        (-1, 999_999_999),  // Timestamp just before the epoch
+        (-5, -500_000_000), // negative Duration: same-sign parts
     ] {
         let mut buf = Vec::new();
         encode_parts(&mut buf, secs, nanos);

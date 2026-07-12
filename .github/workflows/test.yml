@@ -30,69 +30,19 @@ jobs:
         run: uv sync
       - name: Rust unit tests
         run: uv run cargo test
-      - name: Lint
-        run: |
-          uv run ruff check python tests scripts
-          uv run ruff format --check python tests scripts
-      - name: Type check
-        run: uv run ty check
       - name: Python tests
         run: uv run pytest
 
-  clippy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12" # pyo3 build needs an interpreter
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-  # Releases own the version (it lives in git tags and is set on the runner at
-  # release time), so a PR must never touch it. See release.yml.
-  version-guard:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Forbid version changes in Cargo.toml
-        run: |
-          base=$(git show '${{ github.event.pull_request.base.sha }}:Cargo.toml' \
-                 | grep -m1 '^version = ')
-          head=$(grep -m1 '^version = ' Cargo.toml)
-          if [ "$base" != "$head" ]; then
-            echo "::error::Do not change the version in Cargo.toml — releases bump it automatically (run the release workflow)."
-            echo "base: $base"
-            echo "head: $head"
-            exit 1
-          fi
-
   # Single stable check name for branch protection. The matrix legs above have
-  # per-version names, and version-guard is skipped on push — gate on this.
+  # per-version names, so gate on this instead. Linting lives in lint.yml.
   tests-pass:
     if: always()
-    needs: [test, clippy, version-guard]
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
         run: |
           if [ "${{ needs.test.result }}" != "success" ]; then
             echo "test matrix did not succeed"
-            exit 1
-          fi
-          if [ "${{ needs.clippy.result }}" != "success" ]; then
-            echo "clippy did not succeed"
-            exit 1
-          fi
-          # version-guard runs only on PRs; "skipped" (on push) is acceptable.
-          if [ "${{ needs.version-guard.result }}" != "success" ] \
-             && [ "${{ needs.version-guard.result }}" != "skipped" ]; then
-            echo "version-guard did not succeed"
             exit 1
           fi

@@ -210,4 +210,3 @@ pub fn zigzag_decode64(value: u64) -> i64 {
 
 #[cfg(test)]
 mod tests;
-

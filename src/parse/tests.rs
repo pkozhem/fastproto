@@ -50,7 +50,10 @@ fn map_entry_type_bytes(name: &str) -> Vec<u8> {
     let mut buf = Vec::new();
     wire::write_tag(&mut buf, 1, WireType::Len);
     wire::write_len_delimited(&mut buf, name.as_bytes());
-    for f in [field_bytes("key", 1, 9, None, false), field_bytes("value", 2, 9, None, false)] {
+    for f in [
+        field_bytes("key", 1, 9, None, false),
+        field_bytes("value", 2, 9, None, false),
+    ] {
         wire::write_tag(&mut buf, 2, WireType::Len);
         wire::write_len_delimited(&mut buf, &f);
     }
@@ -88,7 +91,10 @@ fn proto3_optional_becomes_optional_label() {
 
 #[test]
 fn repeated_scalar() {
-    let bytes = message_bytes("R", &[field_bytes("tags", 1, 9, Some(LABEL_REPEATED), false)]);
+    let bytes = message_bytes(
+        "R",
+        &[field_bytes("tags", 1, 9, Some(LABEL_REPEATED), false)],
+    );
     let desc = parse_message(&bytes).unwrap();
     assert_eq!(desc.fields[0].label, Label::Repeated);
     assert_eq!(desc.fields[0].kind, FieldKind::Scalar(ScalarType::String));

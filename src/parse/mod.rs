@@ -87,7 +87,10 @@ pub fn parse_message(bytes: &[u8]) -> Result<MessageDescriptor, ParseError> {
     // descriptor could otherwise trigger an out-of-bounds panic when the
     // encoder or `oneofs()` indexes the group table.
     for field in &mut fields {
-        if field.oneof_index.is_some_and(|idx| idx as usize >= oneofs.len()) {
+        if field
+            .oneof_index
+            .is_some_and(|idx| idx as usize >= oneofs.len())
+        {
             field.oneof_index = None;
         }
     }
@@ -318,7 +321,10 @@ fn interpret_field(
     let label = if is_repeated {
         Label::Repeated
     } else if raw.proto3_optional
-        || matches!(kind, FieldKind::Message | FieldKind::Timestamp | FieldKind::Duration)
+        || matches!(
+            kind,
+            FieldKind::Message | FieldKind::Timestamp | FieldKind::Duration
+        )
         || real_oneof.is_some()
     {
         Label::Optional
@@ -338,4 +344,3 @@ fn interpret_field(
 
 #[cfg(test)]
 mod tests;
-
