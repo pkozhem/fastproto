@@ -52,6 +52,16 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+  rustfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Format check
+        run: cargo fmt --check
+
   # Releases own the version (it lives in git tags and is set on the runner at
   # release time), so a PR must never touch it. See release.yml.
   version-guard:
@@ -77,7 +87,7 @@ jobs:
   # per-version names, and version-guard is skipped on push — gate on this.
   tests-pass:
     if: always()
-    needs: [test, clippy, version-guard]
+    needs: [test, clippy, rustfmt, version-guard]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
@@ -88,6 +98,10 @@ jobs:
           fi
           if [ "${{ needs.clippy.result }}" != "success" ]; then
             echo "clippy did not succeed"
+            exit 1
+          fi
+          if [ "${{ needs.rustfmt.result }}" != "success" ]; then
+            echo "rustfmt did not succeed"
             exit 1
           fi
           # version-guard runs only on PRs; "skipped" (on push) is acceptable.

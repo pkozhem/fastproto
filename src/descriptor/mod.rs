@@ -91,7 +91,10 @@ pub enum FieldKind {
     Message,
     /// A `map<K, V>` field. On the wire it is a repeated entry message with
     /// `key` = 1 and `value` = 2.
-    Map { key: ScalarType, value: MapValue },
+    Map {
+        key: ScalarType,
+        value: MapValue,
+    },
     /// `google.protobuf.Timestamp`, surfaced as a Python `datetime`.
     Timestamp,
     /// `google.protobuf.Duration`, surfaced as a Python `timedelta`.
@@ -150,4 +153,3 @@ impl MessageDescriptor {
 
 #[cfg(test)]
 mod tests;
-

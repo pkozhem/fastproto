@@ -113,7 +113,15 @@ pub fn decode_message<'py>(
             }
             _ if field.label == Label::Repeated => {
                 let list = lists.get(&number).unwrap();
-                let handled = decode_repeated(py, &field.kind, refs.get(&number), wire_type, &mut reader, list, depth)?;
+                let handled = decode_repeated(
+                    py,
+                    &field.kind,
+                    refs.get(&number),
+                    wire_type,
+                    &mut reader,
+                    list,
+                    depth,
+                )?;
                 if !handled {
                     // Wire type didn't match the repeated field; preserve the
                     // bytes as unknown rather than dropping them silently.
@@ -138,12 +146,18 @@ pub fn decode_message<'py>(
             FieldKind::Timestamp => {
                 let sub = reader.read_len_delimited().map_err(wire_err)?;
                 let (secs, nanos) = wellknown::decode_parts(sub).map_err(wire_err)?;
-                kwargs.set_item(field.name.as_str(), wellknown::parts_to_datetime(py, secs, nanos)?)?;
+                kwargs.set_item(
+                    field.name.as_str(),
+                    wellknown::parts_to_datetime(py, secs, nanos)?,
+                )?;
             }
             FieldKind::Duration => {
                 let sub = reader.read_len_delimited().map_err(wire_err)?;
                 let (secs, nanos) = wellknown::decode_parts(sub).map_err(wire_err)?;
-                kwargs.set_item(field.name.as_str(), wellknown::parts_to_timedelta(py, secs, nanos)?)?;
+                kwargs.set_item(
+                    field.name.as_str(),
+                    wellknown::parts_to_timedelta(py, secs, nanos)?,
+                )?;
             }
         }
     }
@@ -370,7 +384,9 @@ fn decode_scalar<'py>(
         }
         ScalarType::SInt32 => {
             let raw = reader.read_varint().map_err(wire_err)?;
-            wire::zigzag_decode32(raw as u32).into_pyobject(py)?.into_any()
+            wire::zigzag_decode32(raw as u32)
+                .into_pyobject(py)?
+                .into_any()
         }
         ScalarType::SInt64 => {
             let raw = reader.read_varint().map_err(wire_err)?;

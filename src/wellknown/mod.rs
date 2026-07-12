@@ -119,7 +119,12 @@ fn out_of_range(what: &str) -> PyErr {
 
 fn utc(py: Python<'_>) -> PyResult<&Py<PyAny>> {
     UTC.get_or_try_init(py, || {
-        Ok::<_, PyErr>(py.import("datetime")?.getattr("timezone")?.getattr("utc")?.unbind())
+        Ok::<_, PyErr>(
+            py.import("datetime")?
+                .getattr("timezone")?
+                .getattr("utc")?
+                .unbind(),
+        )
     })
 }
 

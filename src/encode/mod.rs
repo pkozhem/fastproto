@@ -35,7 +35,11 @@ pub fn encode_message(
     for field in &desc.fields {
         let value = instance.getattr(field.name.as_str())?;
 
-        if let FieldKind::Map { key, value: val_kind } = &field.kind {
+        if let FieldKind::Map {
+            key,
+            value: val_kind,
+        } = &field.kind
+        {
             encode_map(py, buf, field.number, *key, val_kind, &value, depth)?;
             continue;
         }
@@ -231,9 +235,9 @@ fn encode_map(
     value: &Bound<'_, PyAny>,
     depth: usize,
 ) -> PyResult<()> {
-    let dict = value.downcast::<PyDict>().map_err(|_| {
-        pyo3::exceptions::PyTypeError::new_err("map field must be a dict")
-    })?;
+    let dict = value
+        .downcast::<PyDict>()
+        .map_err(|_| pyo3::exceptions::PyTypeError::new_err("map field must be a dict"))?;
     for (k, v) in dict.iter() {
         let mut entry = Vec::new();
         // key = field 1
@@ -272,11 +276,7 @@ fn encode_map(
 }
 
 /// Write the tag-less payload of one scalar value.
-fn encode_scalar(
-    buf: &mut Vec<u8>,
-    scalar: ScalarType,
-    value: &Bound<'_, PyAny>,
-) -> PyResult<()> {
+fn encode_scalar(buf: &mut Vec<u8>, scalar: ScalarType, value: &Bound<'_, PyAny>) -> PyResult<()> {
     match scalar {
         ScalarType::Int32 => {
             let v: i32 = value.extract()?;
@@ -357,9 +357,8 @@ fn is_default(kind: &FieldKind, value: &Bound<'_, PyAny>) -> PyResult<bool> {
             _ => Ok(value.extract::<i128>()? == 0),
         },
         // Message-like fields are always Optional; maps are handled separately.
-        FieldKind::Message
-        | FieldKind::Timestamp
-        | FieldKind::Duration
-        | FieldKind::Map { .. } => Ok(false),
+        FieldKind::Message | FieldKind::Timestamp | FieldKind::Duration | FieldKind::Map { .. } => {
+            Ok(false)
+        }
     }
 }
