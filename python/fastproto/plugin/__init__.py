@@ -19,14 +19,18 @@ request. Generated modules depend solely on ``fastproto`` at runtime.
 """
 
 import sys
-from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from google.protobuf.compiler import plugin_pb2
-from google.protobuf.descriptor_pb2 import FileDescriptorProto
 
 from ._index import TypeIndex
 from ._render import ModuleRenderer, ShortNameCollisionError
 from ._validate import InvalidSchemaError, SchemaValidator
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from google.protobuf.descriptor_pb2 import FileDescriptorProto
 
 # Files whose types are bundled as structural dataclasses in
 # ``fastproto.wellknown`` (Timestamp/Duration are native and excluded).
@@ -77,7 +81,7 @@ def generate(
     return response
 
 
-def generate_wellknown(files: Iterable[FileDescriptorProto]) -> str:
+def generate_wellknown(files: "Iterable[FileDescriptorProto]") -> str:
     """Render ``fastproto/wellknown.py`` from the WKT file descriptors.
 
     The well-known ``.proto`` files don't import each other, so their blocks

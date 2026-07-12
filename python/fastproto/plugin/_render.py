@@ -4,14 +4,20 @@
 readable dataclass module — header, enums, and the decorated message classes.
 """
 
-from google.protobuf.descriptor_pb2 import (
-    DescriptorProto,
-    EnumDescriptorProto,
-    FieldDescriptorProto,
-    FileDescriptorProto,
-)
+from typing import TYPE_CHECKING
 
-from ._index import NATIVE_WKT, TypeIndex, all_messages, has_presence, is_named_type
+from google.protobuf.descriptor_pb2 import FieldDescriptorProto
+
+from ._index import NATIVE_WKT, all_messages, has_presence, is_named_type
+
+if TYPE_CHECKING:
+    from google.protobuf.descriptor_pb2 import (
+        DescriptorProto,
+        EnumDescriptorProto,
+        FileDescriptorProto,
+    )
+
+    from ._index import TypeIndex
 
 # Field numbers of the synthetic map entry message (key, value).
 _MAP_KEY_FIELD = 1
@@ -44,7 +50,7 @@ class ShortNameCollisionError(Exception):
 class ModuleRenderer:
     """Renders the ``<name>_pb.py`` source for one proto file."""
 
-    def __init__(self, file: FileDescriptorProto, index: TypeIndex) -> None:
+    def __init__(self, file: "FileDescriptorProto", index: "TypeIndex") -> None:
         self._file = file
         self._index = index
 
@@ -137,7 +143,7 @@ class ModuleRenderer:
                 # Structural well-known types ship inside the fastproto package.
                 wellknown.add(top)
             else:
-                by_module.setdefault(TypeIndex.module_of(info.file), set()).add(top)
+                by_module.setdefault(self._module_of(info.file), set()).add(top)
 
         for type_name in self._referenced_type_names():
             consider(type_name)
@@ -157,6 +163,10 @@ class ModuleRenderer:
                 f"    from {module} import {joined}",
             ]
         return lines
+
+    def _module_of(self, proto_name: str) -> str:
+        """Dotted module path of a generated file: ``a/b.proto`` -> ``a.b_pb``."""
+        return f"{proto_name.removesuffix('.proto')}_pb".replace("/", ".")
 
     def _referenced_type_names(self) -> list[str]:
         """Full names of every message/enum referenced by this file's fields."""
@@ -209,13 +219,13 @@ class ModuleRenderer:
         ]
         return blocks
 
-    def _render_message(self, msg: DescriptorProto, full_name: str) -> str:
+    def _render_message(self, msg: "DescriptorProto", full_name: str) -> str:
         """Render a message: its descriptor constants plus the class tree."""
         constants = self._collect_constants(msg, full_name)
         class_src = self._render_class(msg, full_name, 0)
         return "\n\n\n".join([*constants, class_src])
 
-    def _collect_constants(self, msg: DescriptorProto, full_name: str) -> list[str]:
+    def _collect_constants(self, msg: "DescriptorProto", full_name: str) -> list[str]:
         """Descriptor constants for ``msg`` and nested messages, outermost first.
 
         The constants live at module level (even for nested classes) so a class
@@ -236,7 +246,7 @@ class ModuleRenderer:
                 blocks += self._collect_constants(nested, f"{full_name}.{nested.name}")
         return blocks
 
-    def _render_class(self, msg: DescriptorProto, full_name: str, indent: int) -> str:
+    def _render_class(self, msg: "DescriptorProto", full_name: str, indent: int) -> str:
         """Render one message class, recursing into nested enums and messages."""
         pad = "    " * indent
         inner = pad + "    "
@@ -335,15 +345,13 @@ class ModuleRenderer:
             return self._index.qualified(field)
         return "object"  # group / unknown
 
-    @staticmethod
-    def _render_enum(enum: EnumDescriptorProto, indent: int = 0) -> str:
+    def _render_enum(self, enum: "EnumDescriptorProto", indent: int = 0) -> str:
         """Render an enum as an ``IntEnum`` subclass, indented for nesting."""
         pad = "    " * indent
         body = [f"{pad}    {value.name} = {value.number}" for value in enum.value]
         header = f"{pad}class {enum.name}(IntEnum):"
         return "\n".join([header, *(body or [f"{pad}    pass"])])
 
-    @staticmethod
-    def _descriptor_const_name(qualified: str) -> str:
+    def _descriptor_const_name(self, qualified: str) -> str:
         """Descriptor constant name: ``Outer.Inner`` -> ``_OUTER_INNER_DESCRIPTOR``."""
         return f"_{qualified.replace('.', '_').upper()}_DESCRIPTOR"

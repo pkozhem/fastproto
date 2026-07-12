@@ -7,12 +7,14 @@ misbehaves at runtime.
 """
 
 import keyword
+from typing import TYPE_CHECKING
 
-from google.protobuf.descriptor_pb2 import (
-    DescriptorProto,
-    EnumDescriptorProto,
-    FileDescriptorProto,
-)
+if TYPE_CHECKING:
+    from google.protobuf.descriptor_pb2 import (
+        DescriptorProto,
+        EnumDescriptorProto,
+        FileDescriptorProto,
+    )
 
 # Names the generated module reads at module scope: the runtime imports, the
 # `@message` / `@dataclass` decorators, and the `bytes.fromhex(...)` builtin. A
@@ -49,7 +51,7 @@ class InvalidSchemaError(Exception):
 class SchemaValidator:
     """Checks one file's names against what the generated module needs."""
 
-    def __init__(self, file: FileDescriptorProto) -> None:
+    def __init__(self, file: "FileDescriptorProto") -> None:
         self._file = file
 
     def validate(self) -> None:
@@ -66,7 +68,7 @@ class SchemaValidator:
         for msg in file.message_type:
             self._check_message(msg)
 
-    def _check_message(self, msg: DescriptorProto) -> None:
+    def _check_message(self, msg: "DescriptorProto") -> None:
         if msg.options.map_entry:
             return  # synthetic; never emitted as a class
         self._check_type_name(msg.name, "message")
@@ -83,7 +85,7 @@ class SchemaValidator:
         for nested in msg.nested_type:
             self._check_message(nested)
 
-    def _check_enum(self, enum: EnumDescriptorProto) -> None:
+    def _check_enum(self, enum: "EnumDescriptorProto") -> None:
         self._check_type_name(enum.name, "enum")
         for value in enum.value:
             self._check_identifier(value.name, "enum value")
@@ -113,8 +115,7 @@ class SchemaValidator:
             )
             raise InvalidSchemaError(msg)
 
-    @staticmethod
-    def _is_reserved_enum_member(name: str) -> bool:
+    def _is_reserved_enum_member(self, name: str) -> bool:
         """Whether Python's ``enum`` rejects ``name`` (``mro`` or a ``_sunder_``)."""
         is_sunder = (
             name.startswith("_") and name.endswith("_") and not name.startswith("__")

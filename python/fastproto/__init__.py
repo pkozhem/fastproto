@@ -6,12 +6,61 @@ class to the native (de)serialization engine.
 """
 
 import sys
-from collections.abc import Callable
-from typing import Annotated, ClassVar, Self, cast, override
+from typing import TYPE_CHECKING, Annotated, ClassVar, Self, cast, override
 
-from ._core import Descriptor, compile_descriptor
+from ._core import compile_descriptor
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from ._core import Descriptor
 
 __all__ = ["Message", "Scalar", "message"]
+
+
+class Message:
+    """Base class for generated message dataclasses.
+
+    Provides the serialization API; the :func:`message` decorator attaches the
+    compiled descriptor as ``__fastproto__``. Generated classes are plain
+    ``@dataclass`` types that inherit from this, so ``to_bytes`` / ``from_bytes``
+    are fully typed for callers.
+
+    The ``_fastproto_unknown`` slot holds the raw wire bytes of fields the
+    schema doesn't know about: the decoder stores them and the encoder re-emits
+    them, so decode -> encode round-trips preserve fields added by newer
+    producers (protobuf forward compatibility). It is deliberately *not* a
+    dataclass field — adding an annotation here would make ``@dataclass`` treat
+    it as an ``__init__`` parameter on every generated class.
+    """
+
+    __slots__ = ("_fastproto_unknown",)
+    __fastproto__: "ClassVar[Descriptor]"
+
+    def to_bytes(self) -> bytes:
+        """Serialize this message to protobuf wire bytes."""
+        _ensure_linked(type(self))
+        return self.__fastproto__.encode(self)
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> Self:
+        """Deserialize protobuf wire bytes into a new instance of ``cls``."""
+        _ensure_linked(cls)
+        return cls.__fastproto__.decode(cls, data)
+
+    def which_oneof(self, name: str) -> str | None:
+        """Return the set member of oneof group ``name``, or ``None`` if unset.
+
+        Mirrors google-protobuf's ``WhichOneof``: members are plain ``T | None``
+        fields, and this reports which one currently holds a value. Raises
+        :class:`ValueError` if ``name`` is not a oneof group of this message.
+        """
+        for group, members in self.__fastproto__.oneofs():
+            if group == name:
+                return next((m for m in members if getattr(self, m) is not None), None)
+        available = [group for group, _ in self.__fastproto__.oneofs()]
+        msg = f"{type(self).__name__!r} has no oneof group {name!r}; got {available}"
+        raise ValueError(msg)
 
 
 class _ScalarMeta:
@@ -59,49 +108,22 @@ class Scalar:
     Bytes = Annotated[bytes, _ScalarMeta("bytes")]
 
 
-class Message:
-    """Base class for generated message dataclasses.
+def message[MessageT: Message](
+    descriptor: bytes,
+) -> "Callable[[type[MessageT]], type[MessageT]]":
+    """Bind a :class:`Message` dataclass to its compiled descriptor.
 
-    Provides the serialization API; the :func:`message` decorator attaches the
-    compiled descriptor as ``__fastproto__``. Generated classes are plain
-    ``@dataclass`` types that inherit from this, so ``to_bytes`` / ``from_bytes``
-    are fully typed for callers.
-
-    The ``_fastproto_unknown`` slot holds the raw wire bytes of fields the
-    schema doesn't know about: the decoder stores them and the encoder re-emits
-    them, so decode -> encode round-trips preserve fields added by newer
-    producers (protobuf forward compatibility). It is deliberately *not* a
-    dataclass field — adding an annotation here would make ``@dataclass`` treat
-    it as an ``__init__`` parameter on every generated class.
+    Parses the embedded ``DescriptorProto`` bytes once and stores the result on
+    the class as ``__fastproto__`` for :meth:`Message.to_bytes` /
+    :meth:`Message.from_bytes` to use.
     """
+    compiled = compile_descriptor(descriptor)
 
-    __slots__ = ("_fastproto_unknown",)
-    __fastproto__: ClassVar[Descriptor]
+    def bind(cls: type[MessageT]) -> type[MessageT]:
+        cls.__fastproto__ = compiled
+        return cls
 
-    def to_bytes(self) -> bytes:
-        """Serialize this message to protobuf wire bytes."""
-        _ensure_linked(type(self))
-        return self.__fastproto__.encode(self)
-
-    @classmethod
-    def from_bytes(cls, data: bytes) -> Self:
-        """Deserialize protobuf wire bytes into a new instance of ``cls``."""
-        _ensure_linked(cls)
-        return cls.__fastproto__.decode(cls, data)
-
-    def which_oneof(self, name: str) -> str | None:
-        """Return the set member of oneof group ``name``, or ``None`` if unset.
-
-        Mirrors google-protobuf's ``WhichOneof``: members are plain ``T | None``
-        fields, and this reports which one currently holds a value. Raises
-        :class:`ValueError` if ``name`` is not a oneof group of this message.
-        """
-        for group, members in self.__fastproto__.oneofs():
-            if group == name:
-                return next((m for m in members if getattr(self, m) is not None), None)
-        available = [group for group, _ in self.__fastproto__.oneofs()]
-        msg = f"{type(self).__name__!r} has no oneof group {name!r}; got {available}"
-        raise ValueError(msg)
+    return bind
 
 
 def _resolve(namespace: dict[str, object], qualified: str) -> type:
@@ -152,21 +174,3 @@ def _ensure_linked(cls: type[Message]) -> None:
     for target in resolved.values():
         if hasattr(target, "__fastproto__"):
             _ensure_linked(cast("type[Message]", target))
-
-
-def message[MessageT: Message](
-    descriptor: bytes,
-) -> Callable[[type[MessageT]], type[MessageT]]:
-    """Bind a :class:`Message` dataclass to its compiled descriptor.
-
-    Parses the embedded ``DescriptorProto`` bytes once and stores the result on
-    the class as ``__fastproto__`` for :meth:`Message.to_bytes` /
-    :meth:`Message.from_bytes` to use.
-    """
-    compiled = compile_descriptor(descriptor)
-
-    def bind(cls: type[MessageT]) -> type[MessageT]:
-        cls.__fastproto__ = compiled
-        return cls
-
-    return bind
