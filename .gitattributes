@@ -1,2 +1,2 @@
 tests/**/*.py linguist-vendored
-python/fastproto/plugin.py linguist-vendored
+python/fastproto/plugin/** linguist-vendored

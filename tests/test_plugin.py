@@ -50,7 +50,9 @@ def test_generates_committed_output(unit: str, protos: list[str]) -> None:
 
 def test_wellknown_module_matches_generator() -> None:
     fileset = FileDescriptorSet.FromString((FIXTURES / "wellknown.fds").read_bytes())
-    committed = Path(plugin.__file__).with_name("wellknown.py").read_text()
+    # plugin is a package (…/fastproto/plugin/__init__.py); wellknown.py sits in
+    # its parent (…/fastproto/wellknown.py).
+    committed = (Path(plugin.__file__).parent.parent / "wellknown.py").read_text()
     assert plugin.generate_wellknown(fileset.file) == committed
 
 

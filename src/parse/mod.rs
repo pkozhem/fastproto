@@ -38,6 +38,67 @@ impl From<WireError> for ParseError {
     }
 }
 
+/// Parse a `DescriptorProto` into a [`MessageDescriptor`].
+pub fn parse_message(bytes: &[u8]) -> Result<MessageDescriptor, ParseError> {
+    let mut reader = Reader::new(bytes);
+    let mut name = String::new();
+    let mut raw_fields = Vec::new();
+    let mut map_entries: HashMap<String, MapEntry> = HashMap::new();
+    let mut oneofs = Vec::new();
+
+    while !reader.is_empty() {
+        let (number, wire) = reader.read_tag()?;
+        match (number, wire) {
+            (1, WireType::Len) => name = read_string(&mut reader)?,
+            (2, WireType::Len) => {
+                raw_fields.push(parse_raw_field(reader.read_len_delimited()?)?);
+            }
+            (3, WireType::Len) => {
+                let nested = reader.read_len_delimited()?;
+                if let Some((entry_name, entry)) = parse_nested_map_entry(nested)? {
+                    map_entries.insert(entry_name, entry);
+                }
+            }
+            (8, WireType::Len) => {
+                // OneofDescriptorProto: name = 1
+                let decl = reader.read_len_delimited()?;
+                let mut o = Reader::new(decl);
+                let mut oneof_name = String::new();
+                while !o.is_empty() {
+                    let (n, w) = o.read_tag()?;
+                    if n == 1 && w == WireType::Len {
+                        oneof_name = read_string(&mut o)?;
+                    } else {
+                        o.skip(w)?;
+                    }
+                }
+                oneofs.push(oneof_name);
+            }
+            (_, w) => reader.skip(w)?,
+        }
+    }
+
+    let mut fields = raw_fields
+        .into_iter()
+        .map(|raw| interpret_field(raw, &map_entries, &name))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Drop any `oneof_index` that points past the declared groups: a malformed
+    // descriptor could otherwise trigger an out-of-bounds panic when the
+    // encoder or `oneofs()` indexes the group table.
+    for field in &mut fields {
+        if field.oneof_index.is_some_and(|idx| idx as usize >= oneofs.len()) {
+            field.oneof_index = None;
+        }
+    }
+
+    Ok(MessageDescriptor {
+        name,
+        fields,
+        oneofs,
+    })
+}
+
 // FieldDescriptorProto.Label
 const LABEL_REPEATED: i64 = 3;
 // Well-known types surfaced as native Python objects (datetime / timedelta).
@@ -272,67 +333,6 @@ fn interpret_field(
         label,
         type_name,
         oneof_index: real_oneof,
-    })
-}
-
-/// Parse a `DescriptorProto` into a [`MessageDescriptor`].
-pub fn parse_message(bytes: &[u8]) -> Result<MessageDescriptor, ParseError> {
-    let mut reader = Reader::new(bytes);
-    let mut name = String::new();
-    let mut raw_fields = Vec::new();
-    let mut map_entries: HashMap<String, MapEntry> = HashMap::new();
-    let mut oneofs = Vec::new();
-
-    while !reader.is_empty() {
-        let (number, wire) = reader.read_tag()?;
-        match (number, wire) {
-            (1, WireType::Len) => name = read_string(&mut reader)?,
-            (2, WireType::Len) => {
-                raw_fields.push(parse_raw_field(reader.read_len_delimited()?)?);
-            }
-            (3, WireType::Len) => {
-                let nested = reader.read_len_delimited()?;
-                if let Some((entry_name, entry)) = parse_nested_map_entry(nested)? {
-                    map_entries.insert(entry_name, entry);
-                }
-            }
-            (8, WireType::Len) => {
-                // OneofDescriptorProto: name = 1
-                let decl = reader.read_len_delimited()?;
-                let mut o = Reader::new(decl);
-                let mut oneof_name = String::new();
-                while !o.is_empty() {
-                    let (n, w) = o.read_tag()?;
-                    if n == 1 && w == WireType::Len {
-                        oneof_name = read_string(&mut o)?;
-                    } else {
-                        o.skip(w)?;
-                    }
-                }
-                oneofs.push(oneof_name);
-            }
-            (_, w) => reader.skip(w)?,
-        }
-    }
-
-    let mut fields = raw_fields
-        .into_iter()
-        .map(|raw| interpret_field(raw, &map_entries, &name))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Drop any `oneof_index` that points past the declared groups: a malformed
-    // descriptor could otherwise trigger an out-of-bounds panic when the
-    // encoder or `oneofs()` indexes the group table.
-    for field in &mut fields {
-        if field.oneof_index.is_some_and(|idx| idx as usize >= oneofs.len()) {
-            field.oneof_index = None;
-        }
-    }
-
-    Ok(MessageDescriptor {
-        name,
-        fields,
-        oneofs,
     })
 }
 

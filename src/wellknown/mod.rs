@@ -31,46 +31,6 @@ const TS_MAX_SECONDS: i64 = 253_402_300_799;
 const DURATION_MAX_SECONDS: i64 = 315_576_000_000;
 const MAX_NANOS: i32 = 999_999_999;
 
-fn out_of_range(what: &str) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(format!("{what} out of range"))
-}
-
-fn utc(py: Python<'_>) -> PyResult<&Py<PyAny>> {
-    UTC.get_or_try_init(py, || {
-        Ok::<_, PyErr>(py.import("datetime")?.getattr("timezone")?.getattr("utc")?.unbind())
-    })
-}
-
-fn epoch(py: Python<'_>) -> PyResult<&Py<PyAny>> {
-    EPOCH.get_or_try_init(py, || {
-        let datetime = py.import("datetime")?.getattr("datetime")?;
-        let tz = utc(py)?.bind(py);
-        Ok::<_, PyErr>(datetime.call1((1970, 1, 1, 0, 0, 0, 0, tz))?.unbind())
-    })
-}
-
-fn timedelta(py: Python<'_>) -> PyResult<&Py<PyAny>> {
-    TIMEDELTA.get_or_try_init(py, || {
-        Ok::<_, PyErr>(py.import("datetime")?.getattr("timedelta")?.unbind())
-    })
-}
-
-/// Total nanoseconds represented by a Python `timedelta` (exact).
-fn timedelta_total_nanos(delta: &Bound<'_, PyAny>) -> PyResult<i128> {
-    let days: i128 = delta.getattr("days")?.extract()?;
-    let seconds: i128 = delta.getattr("seconds")?.extract()?;
-    let micros: i128 = delta.getattr("microseconds")?.extract()?;
-    Ok((days * 86_400 + seconds) * NANOS_PER_SECOND + micros * 1_000)
-}
-
-/// Build a Python `timedelta` from whole seconds + (truncated) nanoseconds.
-fn timedelta_from<'py>(py: Python<'py>, secs: i64, nanos: i32) -> PyResult<Bound<'py, PyAny>> {
-    let kwargs = PyDict::new(py);
-    kwargs.set_item("seconds", secs)?;
-    kwargs.set_item("microseconds", nanos / 1_000)?;
-    timedelta(py)?.bind(py).call((), Some(&kwargs))
-}
-
 /// `datetime` -> Timestamp `(seconds, nanos)`; naive datetimes are read as UTC.
 /// Per the protobuf spec, `nanos` is always in `[0, 999_999_999]`.
 pub fn datetime_to_parts(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<(i64, i32)> {
@@ -151,6 +111,46 @@ pub fn decode_parts(data: &[u8]) -> Result<(i64, i32), crate::wire::WireError> {
         }
     }
     Ok((secs, nanos))
+}
+
+fn out_of_range(what: &str) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(format!("{what} out of range"))
+}
+
+fn utc(py: Python<'_>) -> PyResult<&Py<PyAny>> {
+    UTC.get_or_try_init(py, || {
+        Ok::<_, PyErr>(py.import("datetime")?.getattr("timezone")?.getattr("utc")?.unbind())
+    })
+}
+
+fn epoch(py: Python<'_>) -> PyResult<&Py<PyAny>> {
+    EPOCH.get_or_try_init(py, || {
+        let datetime = py.import("datetime")?.getattr("datetime")?;
+        let tz = utc(py)?.bind(py);
+        Ok::<_, PyErr>(datetime.call1((1970, 1, 1, 0, 0, 0, 0, tz))?.unbind())
+    })
+}
+
+fn timedelta(py: Python<'_>) -> PyResult<&Py<PyAny>> {
+    TIMEDELTA.get_or_try_init(py, || {
+        Ok::<_, PyErr>(py.import("datetime")?.getattr("timedelta")?.unbind())
+    })
+}
+
+/// Total nanoseconds represented by a Python `timedelta` (exact).
+fn timedelta_total_nanos(delta: &Bound<'_, PyAny>) -> PyResult<i128> {
+    let days: i128 = delta.getattr("days")?.extract()?;
+    let seconds: i128 = delta.getattr("seconds")?.extract()?;
+    let micros: i128 = delta.getattr("microseconds")?.extract()?;
+    Ok((days * 86_400 + seconds) * NANOS_PER_SECOND + micros * 1_000)
+}
+
+/// Build a Python `timedelta` from whole seconds + (truncated) nanoseconds.
+fn timedelta_from<'py>(py: Python<'py>, secs: i64, nanos: i32) -> PyResult<Bound<'py, PyAny>> {
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("seconds", secs)?;
+    kwargs.set_item("microseconds", nanos / 1_000)?;
+    timedelta(py)?.bind(py).call((), Some(&kwargs))
 }
 
 #[cfg(test)]
