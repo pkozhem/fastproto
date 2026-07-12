@@ -57,6 +57,12 @@ pub fn decode_message<'py>(
     // a decode -> encode round-trip keeps them (protobuf forward compatibility).
     let mut unknown = Vec::new();
 
+    // For each oneof group, the field name currently occupying it. protobuf
+    // semantics are "last one on the wire wins", so a later member of the same
+    // group clears the earlier one from the kwargs (else the instance would
+    // have two members set and fail to re-encode).
+    let mut oneof_owner: HashMap<u32, &str> = HashMap::new();
+
     let mut reader = Reader::new(data);
     while !reader.is_empty() {
         let start = reader.pos();
@@ -90,6 +96,15 @@ pub fn decode_message<'py>(
             }
         }
 
+        // A oneof member about to be set clears any earlier member of its group.
+        if let Some(group) = field.oneof_index {
+            if let Some(prev) = oneof_owner.insert(group, field.name.as_str()) {
+                if prev != field.name.as_str() {
+                    kwargs.del_item(prev)?;
+                }
+            }
+        }
+
         match &field.kind {
             FieldKind::Map { key, value } => {
                 let entry = reader.read_len_delimited().map_err(wire_err)?;
@@ -98,7 +113,13 @@ pub fn decode_message<'py>(
             }
             _ if field.label == Label::Repeated => {
                 let list = lists.get(&number).unwrap();
-                decode_repeated(py, &field.kind, refs.get(&number), wire_type, &mut reader, list, depth)?;
+                let handled = decode_repeated(py, &field.kind, refs.get(&number), wire_type, &mut reader, list, depth)?;
+                if !handled {
+                    // Wire type didn't match the repeated field; preserve the
+                    // bytes as unknown rather than dropping them silently.
+                    reader.skip(wire_type).map_err(wire_err)?;
+                    unknown.extend_from_slice(reader.raw_since(start));
+                }
             }
             FieldKind::Scalar(scalar) => {
                 let value = decode_scalar(py, *scalar, &mut reader)?;
@@ -135,6 +156,10 @@ pub fn decode_message<'py>(
 }
 
 /// Append one or more repeated elements (handling packed encoding).
+///
+/// Returns `false` (without consuming any bytes) when `wire_type` doesn't match
+/// this field, so the caller can preserve the raw bytes as an unknown field
+/// instead of dropping them.
 fn decode_repeated<'py>(
     py: Python<'py>,
     kind: &FieldKind,
@@ -143,7 +168,7 @@ fn decode_repeated<'py>(
     reader: &mut Reader<'_>,
     list: &Bound<'py, PyList>,
     depth: usize,
-) -> PyResult<()> {
+) -> PyResult<bool> {
     match kind {
         FieldKind::Scalar(scalar) if scalar.is_packable() => {
             if wire_type == WireType::Len {
@@ -155,7 +180,7 @@ fn decode_repeated<'py>(
             } else if wire_type == scalar.wire_type() {
                 list.append(decode_scalar(py, *scalar, reader)?)?;
             } else {
-                reader.skip(wire_type).map_err(wire_err)?;
+                return Ok(false);
             }
         }
         FieldKind::Scalar(scalar) => {
@@ -163,7 +188,7 @@ fn decode_repeated<'py>(
             if wire_type == WireType::Len {
                 list.append(decode_scalar(py, *scalar, reader)?)?;
             } else {
-                reader.skip(wire_type).map_err(wire_err)?;
+                return Ok(false);
             }
         }
         FieldKind::Enum => {
@@ -178,7 +203,7 @@ fn decode_repeated<'py>(
                 let raw = reader.read_varint().map_err(wire_err)?;
                 list.append(coerce_enum(py, class_ref, raw as u32 as i32)?)?;
             } else {
-                reader.skip(wire_type).map_err(wire_err)?;
+                return Ok(false);
             }
         }
         FieldKind::Message => {
@@ -186,7 +211,7 @@ fn decode_repeated<'py>(
                 let sub = reader.read_len_delimited().map_err(wire_err)?;
                 list.append(decode_message_value(py, class_ref, sub, depth)?)?;
             } else {
-                reader.skip(wire_type).map_err(wire_err)?;
+                return Ok(false);
             }
         }
         FieldKind::Timestamp | FieldKind::Duration => {
@@ -198,12 +223,12 @@ fn decode_repeated<'py>(
                     _ => wellknown::parts_to_timedelta(py, secs, nanos)?,
                 })?;
             } else {
-                reader.skip(wire_type).map_err(wire_err)?;
+                return Ok(false);
             }
         }
         FieldKind::Map { .. } => unreachable!("maps handled separately"),
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Decode a single `map<K, V>` entry message into `(key, value)` objects.

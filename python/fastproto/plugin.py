@@ -13,6 +13,7 @@ Note: ``google.protobuf`` is used *here*, at build time, only to parse the
 request. Generated modules depend solely on ``fastproto`` at runtime.
 """
 
+import keyword
 import sys
 from collections.abc import Iterable
 from typing import NamedTuple
@@ -39,6 +40,16 @@ class _TypeInfo(NamedTuple):
 
 class _ShortNameCollisionError(Exception):
     """Two types visible from one module share a short class name."""
+
+
+class _InvalidSchemaError(Exception):
+    """The schema can't be turned into valid, working Python (bad name / syntax)."""
+
+
+# Field names that would shadow the `fastproto.Message` API if used as
+# dataclass fields. (Proto identifiers can't start with `_`, so the private
+# `_fastproto_unknown` / `__fastproto__` slots are unreachable and omitted.)
+_RESERVED_FIELD_NAMES = frozenset({"to_bytes", "from_bytes", "which_oneof"})
 
 
 # Field numbers of the synthetic map entry message (key, value).
@@ -550,6 +561,59 @@ def _output_name(proto_name: str) -> str:
     return f"{proto_name.removesuffix('.proto')}_pb.py"
 
 
+def _check_identifier(file_name: str, name: str, what: str) -> None:
+    """Reject a name that isn't a usable Python identifier."""
+    if not name.isidentifier() or keyword.iskeyword(name):
+        msg = (
+            f"cannot generate {file_name}: {what} {name!r} is not a valid Python"
+            " identifier"
+        )
+        raise _InvalidSchemaError(msg)
+
+
+def _check_enum(file_name: str, enum: EnumDescriptorProto) -> None:
+    _check_identifier(file_name, enum.name, "enum")
+    for value in enum.value:
+        _check_identifier(file_name, value.name, "enum value")
+
+
+def _check_message(file_name: str, msg: DescriptorProto) -> None:
+    if msg.options.map_entry:
+        return  # synthetic; never emitted as a class
+    _check_identifier(file_name, msg.name, "message")
+    for f in msg.field:
+        _check_identifier(file_name, f.name, "field")
+        if f.name in _RESERVED_FIELD_NAMES:
+            msg_text = (
+                f"cannot generate {file_name}: field {f.name!r} would shadow the"
+                " fastproto Message API"
+            )
+            raise _InvalidSchemaError(msg_text)
+    for enum in msg.enum_type:
+        _check_enum(file_name, enum)
+    for nested in msg.nested_type:
+        _check_message(file_name, nested)
+
+
+def _validate_file(file: FileDescriptorProto) -> None:
+    """Reject schemas we can't render into valid, working proto3 Python.
+
+    Guards the generated source against non-proto3 input, Python keywords, and
+    names that would shadow the runtime API — each of which would otherwise
+    yield a module that fails to import or misbehaves at runtime.
+    """
+    if file.syntax != "proto3":
+        msg = (
+            f"cannot generate {file.name}: only proto3 is supported"
+            f" (syntax is {file.syntax or 'proto2'})"
+        )
+        raise _InvalidSchemaError(msg)
+    for enum in file.enum_type:
+        _check_enum(file.name, enum)
+    for msg in file.message_type:
+        _check_message(file.name, msg)
+
+
 def generate(
     request: plugin_pb2.CodeGeneratorRequest,
 ) -> plugin_pb2.CodeGeneratorResponse:
@@ -561,9 +625,11 @@ def generate(
     files_by_name = {f.name: f for f in request.proto_file}
     index = _index_types(request.proto_file)
     for proto_name in request.file_to_generate:
+        file = files_by_name[proto_name]
         try:
-            content = _generate_file(files_by_name[proto_name], index)
-        except _ShortNameCollisionError as exc:
+            _validate_file(file)
+            content = _generate_file(file, index)
+        except (_ShortNameCollisionError, _InvalidSchemaError) as exc:
             response.error = str(exc)
             return response
         output = response.file.add()

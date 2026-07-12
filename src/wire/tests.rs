@@ -59,6 +59,25 @@ fn tag_roundtrip() {
 }
 
 #[test]
+fn rejects_zero_field_number() {
+    // key 0 = field 0, wire type Varint — never a legal protobuf tag.
+    let mut reader = Reader::new(&[0x00]);
+    assert_eq!(reader.read_tag(), Err(WireError::InvalidFieldNumber(0)));
+}
+
+#[test]
+fn rejects_oversized_field_number() {
+    // One past the 29-bit maximum: must not silently truncate onto a real tag.
+    let mut buf = Vec::new();
+    write_varint(&mut buf, (MAX_FIELD_NUMBER + 1) << 3);
+    let mut reader = Reader::new(&buf);
+    assert_eq!(
+        reader.read_tag(),
+        Err(WireError::InvalidFieldNumber(MAX_FIELD_NUMBER + 1))
+    );
+}
+
+#[test]
 fn fixed_roundtrip() {
     let mut buf = Vec::new();
     write_fixed32(&mut buf, 0xdead_beef);
