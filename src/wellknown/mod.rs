@@ -22,6 +22,19 @@ static UTC: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
 
 const NANOS_PER_SECOND: i128 = 1_000_000_000;
 
+// Valid ranges from the protobuf spec. Timestamp spans 0001-01-01T00:00:00Z ..
+// 9999-12-31T23:59:59Z (the range a Python `datetime` can hold); Duration spans
+// +/- 10000 years. Out-of-range wire values would otherwise overflow the Python
+// `datetime`/`timedelta` constructors with an `OverflowError`.
+const TS_MIN_SECONDS: i64 = -62_135_596_800;
+const TS_MAX_SECONDS: i64 = 253_402_300_799;
+const DURATION_MAX_SECONDS: i64 = 315_576_000_000;
+const MAX_NANOS: i32 = 999_999_999;
+
+fn out_of_range(what: &str) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(format!("{what} out of range"))
+}
+
 fn utc(py: Python<'_>) -> PyResult<&Py<PyAny>> {
     UTC.get_or_try_init(py, || {
         Ok::<_, PyErr>(py.import("datetime")?.getattr("timezone")?.getattr("utc")?.unbind())
@@ -81,6 +94,9 @@ pub fn parts_to_datetime<'py>(
     secs: i64,
     nanos: i32,
 ) -> PyResult<Bound<'py, PyAny>> {
+    if !(TS_MIN_SECONDS..=TS_MAX_SECONDS).contains(&secs) || !(0..=MAX_NANOS).contains(&nanos) {
+        return Err(out_of_range("timestamp"));
+    }
     let delta = timedelta_from(py, secs, nanos)?;
     epoch(py)?.bind(py).call_method1("__add__", (delta,))
 }
@@ -90,7 +106,12 @@ pub fn parts_to_datetime<'py>(
 pub fn timedelta_to_parts(value: &Bound<'_, PyAny>) -> PyResult<(i64, i32)> {
     let total = timedelta_total_nanos(value)?;
     // Rust's `/` and `%` truncate toward zero -> same-sign parts, as required.
-    Ok(((total / NANOS_PER_SECOND) as i64, (total % NANOS_PER_SECOND) as i32))
+    let secs = (total / NANOS_PER_SECOND) as i64;
+    let nanos = (total % NANOS_PER_SECOND) as i32;
+    if secs.abs() > DURATION_MAX_SECONDS {
+        return Err(out_of_range("duration"));
+    }
+    Ok((secs, nanos))
 }
 
 /// Duration `(seconds, nanos)` -> `timedelta` (sub-µs truncated).
@@ -99,6 +120,9 @@ pub fn parts_to_timedelta<'py>(
     secs: i64,
     nanos: i32,
 ) -> PyResult<Bound<'py, PyAny>> {
+    if secs.abs() > DURATION_MAX_SECONDS || nanos.abs() > MAX_NANOS {
+        return Err(out_of_range("duration"));
+    }
     timedelta_from(py, secs, nanos)
 }
 

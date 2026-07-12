@@ -204,25 +204,32 @@ fn parse_nested_map_entry(bytes: &[u8]) -> Result<Option<(String, MapEntry)>, Pa
 fn interpret_field(
     raw: RawField,
     map_entries: &HashMap<String, MapEntry>,
+    msg_name: &str,
 ) -> Result<FieldDescriptor, ParseError> {
     let type_code = raw.type_code.ok_or(ParseError::MissingType)?;
     let is_repeated = raw.label == LABEL_REPEATED;
 
-    // Detect maps: a repeated message whose type is a nested map_entry.
+    // Detect maps: a repeated message whose type is a nested map_entry. The
+    // synthetic entry is nested in *this* message, so its full name ends in
+    // `.<msg_name>.<EntryName>`. Checking the parent segment guards against a
+    // real sibling type that merely shares the entry's short name.
     if is_repeated && type_code == TYPE_MESSAGE {
         if let Some(full) = &raw.type_name {
-            if let Some(entry) = map_entries.get(&short_name(full)) {
-                return Ok(FieldDescriptor {
-                    number: raw.number,
-                    name: raw.name,
-                    kind: FieldKind::Map {
-                        key: entry.key,
-                        value: entry.value.clone(),
-                    },
-                    label: Label::Single,
-                    type_name: entry.value_type_name.clone(),
-                    oneof_index: None,
-                });
+            let parent_is_this = full.rsplit('.').nth(1) == Some(msg_name);
+            if parent_is_this {
+                if let Some(entry) = map_entries.get(&short_name(full)) {
+                    return Ok(FieldDescriptor {
+                        number: raw.number,
+                        name: raw.name,
+                        kind: FieldKind::Map {
+                            key: entry.key,
+                            value: entry.value.clone(),
+                        },
+                        label: Label::Single,
+                        type_name: entry.value_type_name.clone(),
+                        oneof_index: None,
+                    });
+                }
             }
         }
     }
@@ -308,10 +315,19 @@ pub fn parse_message(bytes: &[u8]) -> Result<MessageDescriptor, ParseError> {
         }
     }
 
-    let fields = raw_fields
+    let mut fields = raw_fields
         .into_iter()
-        .map(|raw| interpret_field(raw, &map_entries))
+        .map(|raw| interpret_field(raw, &map_entries, &name))
         .collect::<Result<Vec<_>, _>>()?;
+
+    // Drop any `oneof_index` that points past the declared groups: a malformed
+    // descriptor could otherwise trigger an out-of-bounds panic when the
+    // encoder or `oneofs()` indexes the group table.
+    for field in &mut fields {
+        if field.oneof_index.is_some_and(|idx| idx as usize >= oneofs.len()) {
+            field.oneof_index = None;
+        }
+    }
 
     Ok(MessageDescriptor {
         name,

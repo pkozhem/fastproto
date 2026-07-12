@@ -1,1 +1,2 @@
 tests/**/*.py linguist-vendored
+python/fastproto/plugin.py linguist-language=Rust

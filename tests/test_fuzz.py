@@ -37,7 +37,9 @@ def test_decode_recursive_type_never_crashes(data: bytes) -> None:
 @given(st.binary(max_size=512))
 @settings(max_examples=300)
 def test_decode_datetime_fields_never_crashes(data: bytes) -> None:
-    with suppress(*DECODE_ERRORS, OverflowError):  # datetime range is finite
+    # Out-of-range timestamps/durations must surface as ValueError, not leak an
+    # OverflowError from the datetime/timedelta constructors.
+    with suppress(*DECODE_ERRORS):
         Event.from_bytes(data)
 
 
@@ -45,7 +47,11 @@ def test_decode_datetime_fields_never_crashes(data: bytes) -> None:
 @settings(max_examples=300)
 def test_compile_descriptor_never_crashes(data: bytes) -> None:
     with suppress(ValueError):
-        compile_descriptor(data)
+        desc = compile_descriptor(data)
+        # A compiled descriptor must be safe to introspect: a malformed
+        # oneof_index must never panic (out-of-bounds) when read back.
+        desc.ref_fields()
+        desc.oneofs()
 
 
 @given(st.binary(max_size=256))

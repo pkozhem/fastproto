@@ -37,7 +37,12 @@ pub enum WireError {
     InvalidWireType(u64),
     /// A length-delimited field claimed more bytes than remain.
     InvalidLength,
+    /// A tag's field number was 0 or beyond the protobuf maximum (2^29 - 1).
+    InvalidFieldNumber(u64),
 }
+
+/// The largest legal protobuf field number (field numbers are 29-bit).
+pub const MAX_FIELD_NUMBER: u64 = (1 << 29) - 1;
 
 /// Cursor over an input buffer that reads wire primitives.
 pub struct Reader<'a> {
@@ -90,8 +95,13 @@ impl<'a> Reader<'a> {
     pub fn read_tag(&mut self) -> Result<(u32, WireType), WireError> {
         let key = self.read_varint()?;
         let wire = WireType::from_u64(key & 0x7).ok_or(WireError::InvalidWireType(key & 0x7))?;
-        let field = (key >> 3) as u32;
-        Ok((field, wire))
+        // `key >> 3` may exceed 32 bits for a malformed tag; validate before the
+        // cast so a huge field number can't silently truncate onto a real one.
+        let field = key >> 3;
+        if field == 0 || field > MAX_FIELD_NUMBER {
+            return Err(WireError::InvalidFieldNumber(field));
+        }
+        Ok((field as u32, wire))
     }
 
     /// Read a little-endian fixed 32-bit value.

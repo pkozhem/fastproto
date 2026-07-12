@@ -37,6 +37,31 @@ fn message_bytes(name: &str, fields: &[Vec<u8>]) -> Vec<u8> {
     buf
 }
 
+/// A message field carrying an explicit `type_name` (tag 6).
+fn message_field_bytes(name: &str, number: u32, type_name: &str, label: i64) -> Vec<u8> {
+    let mut buf = field_bytes(name, number, 11, Some(label), false); // type 11 = message
+    wire::write_tag(&mut buf, 6, WireType::Len);
+    wire::write_len_delimited(&mut buf, type_name.as_bytes());
+    buf
+}
+
+/// A synthetic `map<string, string>` entry `DescriptorProto` (options.map_entry).
+fn map_entry_type_bytes(name: &str) -> Vec<u8> {
+    let mut buf = Vec::new();
+    wire::write_tag(&mut buf, 1, WireType::Len);
+    wire::write_len_delimited(&mut buf, name.as_bytes());
+    for f in [field_bytes("key", 1, 9, None, false), field_bytes("value", 2, 9, None, false)] {
+        wire::write_tag(&mut buf, 2, WireType::Len);
+        wire::write_len_delimited(&mut buf, &f);
+    }
+    let mut opts = Vec::new();
+    wire::write_tag(&mut opts, 7, WireType::Varint); // MessageOptions.map_entry
+    wire::write_varint(&mut opts, 1);
+    wire::write_tag(&mut buf, 7, WireType::Len);
+    wire::write_len_delimited(&mut buf, &opts);
+    buf
+}
+
 #[test]
 fn parses_scalar_message() {
     let bytes = message_bytes(
@@ -92,6 +117,41 @@ fn message_field_is_optional() {
     assert_eq!(desc.fields[0].kind, FieldKind::Message);
     assert_eq!(desc.fields[0].type_name.as_deref(), Some("demo.Address"));
     assert_eq!(desc.fields[0].label, Label::Optional);
+}
+
+#[test]
+fn out_of_range_oneof_index_is_dropped() {
+    // A field claiming oneof_index 3 when the message declares no oneof groups
+    // must not keep the index (else encode / oneofs() would panic indexing).
+    let mut fb = field_bytes("x", 1, 9, Some(1), false);
+    wire::write_tag(&mut fb, 9, WireType::Varint);
+    wire::write_varint(&mut fb, 3);
+    let desc = parse_message(&message_bytes("M", &[fb])).unwrap();
+    assert!(desc.oneofs.is_empty());
+    assert!(desc.fields[0].oneof_index.is_none());
+}
+
+#[test]
+fn sibling_sharing_map_entry_short_name_is_message() {
+    // `data` is a real map (nested M.DataEntry); `others` references a real
+    // sibling `.pkg.DataEntry` that merely shares the entry's short name and
+    // must stay a message field, not be swallowed as a map.
+    let data = message_field_bytes("data", 1, ".pkg.M.DataEntry", LABEL_REPEATED);
+    let others = message_field_bytes("others", 2, ".pkg.DataEntry", LABEL_REPEATED);
+    let mut buf = Vec::new();
+    wire::write_tag(&mut buf, 1, WireType::Len);
+    wire::write_len_delimited(&mut buf, b"M");
+    for f in [&data, &others] {
+        wire::write_tag(&mut buf, 2, WireType::Len);
+        wire::write_len_delimited(&mut buf, f);
+    }
+    wire::write_tag(&mut buf, 3, WireType::Len);
+    wire::write_len_delimited(&mut buf, &map_entry_type_bytes("DataEntry"));
+
+    let desc = parse_message(&buf).unwrap();
+    assert!(matches!(desc.fields[0].kind, FieldKind::Map { .. }));
+    assert_eq!(desc.fields[1].kind, FieldKind::Message);
+    assert_eq!(desc.fields[1].type_name.as_deref(), Some("pkg.DataEntry"));
 }
 
 mod properties {

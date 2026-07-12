@@ -122,6 +122,32 @@ def test_which_oneof_unknown_group() -> None:
         User(name="x").which_oneof("nope")
 
 
+def test_oneof_last_member_on_wire_wins() -> None:
+    # Two members of the same oneof on the wire is valid protobuf ("last wins").
+    # The decoder must keep only the last, so the result re-encodes cleanly.
+    # phone = field 12 ("a"), telegram = field 13 ("b").
+    data = bytes([0x62, 0x01, ord("a"), 0x6A, 0x01, ord("b")])
+    u = User.from_bytes(data)
+    assert u.phone is None
+    assert u.telegram == "b"
+    assert u.to_bytes() == bytes([0x6A, 0x01, ord("b")])
+
+
+def test_repeated_wrong_wire_type_is_preserved() -> None:
+    # `tags` (field 5) is a repeated string; sending it as a varint is a wire
+    # mismatch. Like a singular mismatch, the bytes must be preserved as unknown
+    # (not silently dropped) so a decode -> encode round-trip is lossless.
+    data = bytes([0x28, 0x01])  # field 5, wire type Varint, value 1
+    u = User.from_bytes(data)
+    assert u.tags == []
+    assert u.to_bytes() == data
+
+
+def test_field_number_zero_is_rejected() -> None:
+    with pytest.raises(ValueError, match="malformed"):
+        User.from_bytes(b"\x00")
+
+
 def test_wire_compatible_with_reference() -> None:
     """Our bytes must be readable by google's protobuf, and vice versa."""
     pytest.importorskip("google.protobuf")

@@ -5,6 +5,7 @@ Byte-level primitives (varint, zig-zag, fixed widths) are unit-tested in Rust
 omission, explicit presence, and decoder robustness on the generated classes.
 """
 
+import math
 from typing import get_args
 
 from fastproto import Scalar
@@ -35,6 +36,16 @@ def test_all_scalars_roundtrip() -> None:
 def test_defaults_are_omitted() -> None:
     assert AllScalars().to_bytes() == b""  # proto3 defaults are not serialized
     assert AllScalars.from_bytes(b"") == AllScalars()
+
+
+def test_negative_zero_float_is_preserved() -> None:
+    # -0.0 == 0.0, but it is not the proto default: google keeps its sign, so
+    # the field must be serialized and the sign must survive the round-trip.
+    data = AllScalars(ratio=-0.0).to_bytes()
+    assert data != b""
+    assert math.copysign(1.0, AllScalars.from_bytes(data).ratio) == -1.0
+    # +0.0 is the default and stays omitted.
+    assert AllScalars(ratio=0.0).to_bytes() == b""
 
 
 def test_known_wire_bytes() -> None:

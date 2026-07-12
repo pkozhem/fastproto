@@ -341,7 +341,9 @@ fn is_default(kind: &FieldKind, value: &Bound<'_, PyAny>) -> PyResult<bool> {
         FieldKind::Enum => Ok(value.extract::<i64>()? == 0),
         FieldKind::Scalar(scalar) => match scalar {
             ScalarType::Bool => Ok(!value.extract::<bool>()?),
-            ScalarType::Float | ScalarType::Double => Ok(value.extract::<f64>()? == 0.0),
+            // Compare bits, not value: `-0.0 == 0.0` is true, but `-0.0` is not
+            // the proto default and must be emitted (google keeps its sign).
+            ScalarType::Float | ScalarType::Double => Ok(value.extract::<f64>()?.to_bits() == 0),
             ScalarType::String => Ok(value.extract::<&str>()?.is_empty()),
             ScalarType::Bytes => Ok(value.extract::<Vec<u8>>()?.is_empty()),
             _ => Ok(value.extract::<i128>()? == 0),

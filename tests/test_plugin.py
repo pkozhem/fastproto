@@ -82,3 +82,41 @@ def test_short_name_collision_is_reported() -> None:
     response = plugin.generate(request)
     assert "Clash" in response.error
     assert not response.file
+
+
+def _single_field_request(
+    *, syntax: str = "proto3", field_name: str = "value"
+) -> CodeGeneratorRequest:
+    file = FileDescriptorProto(name="m.proto", package="m", syntax=syntax)
+    msg = file.message_type.add(name="M")
+    msg.field.add(name=field_name, number=1, type=9, label=1)  # string
+    return CodeGeneratorRequest(file_to_generate=["m.proto"], proto_file=[file])
+
+
+def test_keyword_field_name_is_reported() -> None:
+    response = plugin.generate(_single_field_request(field_name="class"))
+    assert "class" in response.error
+    assert not response.file
+
+
+def test_reserved_field_name_is_reported() -> None:
+    # A field shadowing the Message API would break to_bytes() at runtime.
+    response = plugin.generate(_single_field_request(field_name="to_bytes"))
+    assert "to_bytes" in response.error
+    assert not response.file
+
+
+def test_keyword_enum_value_is_reported() -> None:
+    file = FileDescriptorProto(name="e.proto", package="e", syntax="proto3")
+    enum = file.enum_type.add(name="E")
+    enum.value.add(name="None", number=0)  # `None` is a Python keyword
+    request = CodeGeneratorRequest(file_to_generate=["e.proto"], proto_file=[file])
+    response = plugin.generate(request)
+    assert "None" in response.error
+    assert not response.file
+
+
+def test_non_proto3_is_reported() -> None:
+    response = plugin.generate(_single_field_request(syntax="proto2"))
+    assert "proto3" in response.error
+    assert not response.file

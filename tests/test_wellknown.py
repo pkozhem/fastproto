@@ -55,6 +55,26 @@ def test_repeated_and_map_timestamps() -> None:
     assert back.checkpoints == {"start": FIXED}
 
 
+def _varint(n: int) -> bytes:
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        out.append(b | (0x80 if n else 0))
+        if not n:
+            return bytes(out)
+
+
+def test_out_of_range_timestamp_raises_value_error() -> None:
+    # Timestamp{seconds = 2**60} on field 2 (created_at) is far beyond the
+    # datetime range. It must raise ValueError, not leak an OverflowError from
+    # the datetime constructor.
+    sub = b"\x08" + _varint(1 << 60)  # Timestamp{seconds=2^60}
+    data = b"\x12" + _varint(len(sub)) + sub  # field 2, length-delimited
+    with pytest.raises(ValueError, match="out of range"):
+        Event.from_bytes(data)
+
+
 def test_unset_fields_stay_none() -> None:
     empty = Event.from_bytes(Event().to_bytes())
     assert empty.created_at is None
