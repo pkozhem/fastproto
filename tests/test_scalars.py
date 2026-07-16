@@ -6,7 +6,7 @@ omission, explicit presence, and decoder robustness on the generated classes.
 """
 
 import math
-from typing import get_args
+from typing import cast, get_args
 
 from fastproto import Scalar
 from tests.generated.scalars_pb import AllScalars, Presence
@@ -31,6 +31,25 @@ def test_all_scalars_roundtrip() -> None:
         payload=b"\x00\x01\x02\xff",
     )
     assert AllScalars.from_bytes(msg.to_bytes()) == msg
+
+
+def test_bytes_field_accepts_bytearray() -> None:
+    # The encoder borrows a bytes/bytearray buffer directly (no per-element
+    # boxing); bytearray must be accepted and encode identically to bytes.
+    # `bytearray` is not a `bytes` subtype for the type checker, but the codec
+    # accepts any buffer at runtime; cast keeps the static type honest (the
+    # cast is a no-op, so a real bytearray still reaches the encoder).
+    raw = b"\x00\x01\x02\xff\xfe"
+    buf = cast("bytes", bytearray(raw))
+    assert AllScalars(payload=buf).to_bytes() == AllScalars(payload=raw).to_bytes()
+    assert AllScalars.from_bytes(AllScalars(payload=buf).to_bytes()).payload == raw
+
+
+def test_large_bytes_roundtrip() -> None:
+    # A large payload exercises the bulk-copy encode path (a regression guard
+    # against the O(n)-allocations bytes encoder).
+    blob = bytes(range(256)) * 4096  # 1 MiB
+    assert AllScalars.from_bytes(AllScalars(payload=blob).to_bytes()).payload == blob
 
 
 def test_defaults_are_omitted() -> None:

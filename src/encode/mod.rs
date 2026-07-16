@@ -6,7 +6,7 @@
 //! pre-resolved class references are needed here.
 
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyString};
+use pyo3::types::{PyByteArray, PyBytes, PyDict, PyString};
 
 use crate::descriptor::{FieldKind, Label, MapValue, MessageDescriptor, ScalarType, MAX_DEPTH};
 use crate::message::Descriptor;
@@ -63,9 +63,30 @@ pub fn encode_message(
     // `Message` slot). The slot is unset on hand-constructed instances, so an
     // AttributeError here just means "nothing to preserve".
     if let Ok(raw) = instance.getattr("_fastproto_unknown") {
-        buf.extend_from_slice(&raw.extract::<Vec<u8>>()?);
+        buf.extend_from_slice(byte_slice(&raw)?);
     }
     Ok(())
+}
+
+/// Borrow a `bytes`/`bytearray` value as `&[u8]` without per-element boxing.
+///
+/// `value.extract::<Vec<u8>>()` goes through pyo3's generic sequence path,
+/// which allocates a Python int per byte -- catastrophic for large payloads.
+/// Reading the buffer directly is a plain memory borrow. The caller must copy
+/// out before returning to Python (no arbitrary Python runs in between here).
+fn byte_slice<'a>(value: &'a Bound<'_, PyAny>) -> PyResult<&'a [u8]> {
+    if let Ok(b) = value.downcast::<PyBytes>() {
+        return Ok(b.as_bytes());
+    }
+    if let Ok(ba) = value.downcast::<PyByteArray>() {
+        // SAFETY: the returned slice is consumed synchronously by the caller
+        // (copied into the output buffer) with no intervening Python execution
+        // that could resize or free the bytearray.
+        return Ok(unsafe { ba.as_bytes() });
+    }
+    Err(pyo3::exceptions::PyTypeError::new_err(
+        "bytes field requires a bytes or bytearray value",
+    ))
 }
 
 /// Enforce that at most one member of each real oneof group is set.
@@ -335,8 +356,7 @@ fn encode_scalar(buf: &mut Vec<u8>, scalar: ScalarType, value: &Bound<'_, PyAny>
             wire::write_len_delimited(buf, v.as_bytes());
         }
         ScalarType::Bytes => {
-            let v: Vec<u8> = value.extract()?;
-            wire::write_len_delimited(buf, &v);
+            wire::write_len_delimited(buf, byte_slice(value)?);
         }
     }
     Ok(())
@@ -353,7 +373,7 @@ fn is_default(kind: &FieldKind, value: &Bound<'_, PyAny>) -> PyResult<bool> {
             // the proto default and must be emitted (google keeps its sign).
             ScalarType::Float | ScalarType::Double => Ok(value.extract::<f64>()?.to_bits() == 0),
             ScalarType::String => Ok(value.extract::<&str>()?.is_empty()),
-            ScalarType::Bytes => Ok(value.extract::<Vec<u8>>()?.is_empty()),
+            ScalarType::Bytes => Ok(byte_slice(value)?.is_empty()),
             _ => Ok(value.extract::<i128>()? == 0),
         },
         // Message-like fields are always Optional; maps are handled separately.
