@@ -6,7 +6,7 @@ omission, explicit presence, and decoder robustness on the generated classes.
 """
 
 import math
-from typing import get_args
+from typing import cast, get_args
 
 from fastproto import Scalar
 from tests.generated.scalars_pb import AllScalars, Presence
@@ -36,15 +36,13 @@ def test_all_scalars_roundtrip() -> None:
 def test_bytes_field_accepts_bytearray() -> None:
     # The encoder borrows a bytes/bytearray buffer directly (no per-element
     # boxing); bytearray must be accepted and encode identically to bytes.
+    # `bytearray` is not a `bytes` subtype for the type checker, but the codec
+    # accepts any buffer at runtime; cast keeps the static type honest (the
+    # cast is a no-op, so a real bytearray still reaches the encoder).
     raw = b"\x00\x01\x02\xff\xfe"
-    assert (
-        AllScalars(payload=bytearray(raw)).to_bytes()
-        == AllScalars(payload=raw).to_bytes()
-    )
-    assert (
-        AllScalars.from_bytes(AllScalars(payload=bytearray(raw)).to_bytes()).payload
-        == raw
-    )
+    buf = cast("bytes", bytearray(raw))
+    assert AllScalars(payload=buf).to_bytes() == AllScalars(payload=raw).to_bytes()
+    assert AllScalars.from_bytes(AllScalars(payload=buf).to_bytes()).payload == raw
 
 
 def test_large_bytes_roundtrip() -> None:
