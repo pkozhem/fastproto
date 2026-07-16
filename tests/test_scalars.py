@@ -33,6 +33,27 @@ def test_all_scalars_roundtrip() -> None:
     assert AllScalars.from_bytes(msg.to_bytes()) == msg
 
 
+def test_bytes_field_accepts_bytearray() -> None:
+    # The encoder borrows a bytes/bytearray buffer directly (no per-element
+    # boxing); bytearray must be accepted and encode identically to bytes.
+    raw = b"\x00\x01\x02\xff\xfe"
+    assert (
+        AllScalars(payload=bytearray(raw)).to_bytes()
+        == AllScalars(payload=raw).to_bytes()
+    )
+    assert (
+        AllScalars.from_bytes(AllScalars(payload=bytearray(raw)).to_bytes()).payload
+        == raw
+    )
+
+
+def test_large_bytes_roundtrip() -> None:
+    # A large payload exercises the bulk-copy encode path (a regression guard
+    # against the O(n)-allocations bytes encoder).
+    blob = bytes(range(256)) * 4096  # 1 MiB
+    assert AllScalars.from_bytes(AllScalars(payload=blob).to_bytes()).payload == blob
+
+
 def test_defaults_are_omitted() -> None:
     assert AllScalars().to_bytes() == b""  # proto3 defaults are not serialized
     assert AllScalars.from_bytes(b"") == AllScalars()
