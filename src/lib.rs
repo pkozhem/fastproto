@@ -1,5 +1,13 @@
 use pyo3::prelude::*;
 
+// Experimental: route this crate's Rust-side allocations (output buffers,
+// descriptor tables) through mimalloc instead of the system allocator.
+// Python-object allocations still go through CPython's own allocator, so this
+// only affects the native buffers.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod decode;
 mod descriptor;
 mod encode;
