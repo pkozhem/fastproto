@@ -84,6 +84,15 @@ convention = "pep257"
     "S603", # dev tooling deliberately shells out
     "S607", # protoc is resolved from PATH by design
 ]
+"bench/**" = [
+    "ANN",     # a benchmark script needs no annotations
+    "D103",    # nor per-function docstrings
+    "T201",    # printing the results table is the point
+    "S101",    # sanity assert before timing anything
+    "INP001",  # the bench directory is intentionally not a package
+    "E402",    # imports follow the sys.path setup by necessity
+    "PLC0415", # the protobuf import is deliberately deferred (optional dep)
+]
 
 [tool.ty.environment]
 python-version = "3.12"
