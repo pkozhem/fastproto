@@ -21,3 +21,7 @@ pyo3 = { version = "0.25.0", features = ["abi3-py312"] }
 # Property-based tests for the Python-free layers (wire, parse): arbitrary
 # bytes must never panic the parser. Runs as part of `cargo test`.
 proptest = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
