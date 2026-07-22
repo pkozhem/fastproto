@@ -13,8 +13,8 @@ use message::Descriptor;
 /// Parse `DescriptorProto` bytes into a reusable [`Descriptor`]. Called once per
 /// message by the `message()` decorator at import time.
 #[pyfunction]
-fn compile_descriptor(data: &[u8]) -> PyResult<Descriptor> {
-    message::compile(data)
+fn compile_descriptor(py: Python<'_>, data: &[u8]) -> PyResult<Descriptor> {
+    message::compile(py, data)
 }
 
 /// The native core module, imported by the `fastproto` Python package as
