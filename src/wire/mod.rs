@@ -73,8 +73,15 @@ impl<'a> Reader<'a> {
 
     /// Read a base-128 varint as a raw u64.
     pub fn read_varint(&mut self) -> Result<u64, WireError> {
-        let mut result: u64 = 0;
-        for shift in (0..64).step_by(7) {
+        // Single-byte fast path: tags and small values dominate real streams.
+        let first = *self.buf.get(self.pos).ok_or(WireError::UnexpectedEof)?;
+        if first & 0x80 == 0 {
+            self.pos += 1;
+            return Ok(first as u64);
+        }
+        let mut result = (first & 0x7f) as u64;
+        self.pos += 1;
+        for shift in (7..64).step_by(7) {
             let byte = self.next_byte()?;
             result |= ((byte & 0x7f) as u64) << shift;
             if byte & 0x80 == 0 {
@@ -100,19 +107,25 @@ impl<'a> Reader<'a> {
 
     /// Read a little-endian fixed 32-bit value.
     pub fn read_fixed32(&mut self) -> Result<u32, WireError> {
-        let mut bytes = [0u8; 4];
-        for slot in bytes.iter_mut() {
-            *slot = self.next_byte()?;
-        }
+        let bytes: [u8; 4] = self
+            .buf
+            .get(self.pos..self.pos + 4)
+            .ok_or(WireError::UnexpectedEof)?
+            .try_into()
+            .unwrap();
+        self.pos += 4;
         Ok(u32::from_le_bytes(bytes))
     }
 
     /// Read a little-endian fixed 64-bit value.
     pub fn read_fixed64(&mut self) -> Result<u64, WireError> {
-        let mut bytes = [0u8; 8];
-        for slot in bytes.iter_mut() {
-            *slot = self.next_byte()?;
-        }
+        let bytes: [u8; 8] = self
+            .buf
+            .get(self.pos..self.pos + 8)
+            .ok_or(WireError::UnexpectedEof)?
+            .try_into()
+            .unwrap();
+        self.pos += 8;
         Ok(u64::from_le_bytes(bytes))
     }
 
@@ -156,15 +169,32 @@ impl<'a> Reader<'a> {
 
 /// Append a base-128 varint to `buf`.
 pub fn write_varint(buf: &mut Vec<u8>, mut value: u64) {
+    // Single-byte fast path (tags and small values dominate), then encode the
+    // rest into a stack buffer so the vec sees one append instead of up to 10.
+    if value < 0x80 {
+        buf.push(value as u8);
+        return;
+    }
+    let mut tmp = [0u8; 10];
+    let mut n = 0;
     loop {
         let byte = (value & 0x7f) as u8;
         value >>= 7;
         if value == 0 {
-            buf.push(byte);
-            return;
+            tmp[n] = byte;
+            n += 1;
+            break;
         }
-        buf.push(byte | 0x80);
+        tmp[n] = byte | 0x80;
+        n += 1;
     }
+    buf.extend_from_slice(&tmp[..n]);
+}
+
+/// The number of bytes [`write_varint`] emits for `value`.
+pub fn varint_len(value: u64) -> usize {
+    // 1 + floor(bits/7) for the used bits; value 0 still takes one byte.
+    (64 - (value | 1).leading_zeros() as usize).div_ceil(7)
 }
 
 /// Append a field tag built from a field number and wire type.
@@ -186,6 +216,39 @@ pub fn write_fixed64(buf: &mut Vec<u8>, value: u64) {
 pub fn write_len_delimited(buf: &mut Vec<u8>, data: &[u8]) {
     write_varint(buf, data.len() as u64);
     buf.extend_from_slice(data);
+}
+
+/// Reserve a one-byte slot for the length of a length-delimited field whose
+/// payload is about to be written into `buf` in place, and return the slot's
+/// position. Pair with [`finish_len_prefix`] once the payload is written.
+///
+/// This lets nested messages encode directly into the output buffer instead of
+/// into a temporary that is then copied.
+pub fn begin_len_prefix(buf: &mut Vec<u8>) -> usize {
+    buf.push(0);
+    buf.len() - 1
+}
+
+/// Patch the length slot reserved by [`begin_len_prefix`]. Payloads under 128
+/// bytes (the common case) fit the reserved byte; longer ones shift the
+/// payload right to make room for the full length varint.
+pub fn finish_len_prefix(buf: &mut Vec<u8>, len_pos: usize) {
+    let payload_len = buf.len() - len_pos - 1;
+    if payload_len < 0x80 {
+        buf[len_pos] = payload_len as u8;
+        return;
+    }
+    let extra = varint_len(payload_len as u64) - 1;
+    buf.resize(buf.len() + extra, 0);
+    buf.copy_within(len_pos + 1..len_pos + 1 + payload_len, len_pos + 1 + extra);
+    let mut v = payload_len as u64;
+    let mut pos = len_pos;
+    while v >= 0x80 {
+        buf[pos] = (v as u8 & 0x7f) | 0x80;
+        v >>= 7;
+        pos += 1;
+    }
+    buf[pos] = v as u8;
 }
 
 /// Zig-zag encode a signed 32-bit integer (for `sint32`).

@@ -190,3 +190,41 @@ mod properties {
         }
     }
 }
+
+#[test]
+fn varint_len_matches_write_varint() {
+    for value in [
+        0u64,
+        1,
+        127,
+        128,
+        16_383,
+        16_384,
+        300,
+        u32::MAX as u64,
+        u64::MAX,
+    ] {
+        let mut buf = Vec::new();
+        write_varint(&mut buf, value);
+        assert_eq!(varint_len(value), buf.len(), "value {value}");
+    }
+}
+
+#[test]
+fn len_prefix_in_place_matches_write_len_delimited() {
+    // Cover the one-byte fast path, both sides of the 128 boundary, and a
+    // payload long enough for a three-byte length varint.
+    for size in [0usize, 1, 127, 128, 300, 16_383, 16_384, 70_000] {
+        let payload: Vec<u8> = (0..size).map(|i| i as u8).collect();
+
+        let mut expected = Vec::new();
+        write_len_delimited(&mut expected, &payload);
+
+        let mut got = vec![0xAA]; // leading byte to catch off-by-one patching
+        let pos = begin_len_prefix(&mut got);
+        got.extend_from_slice(&payload);
+        finish_len_prefix(&mut got, pos);
+        assert_eq!(got[0], 0xAA);
+        assert_eq!(&got[1..], &expected[..], "size {size}");
+    }
+}
