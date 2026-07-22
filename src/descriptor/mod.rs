@@ -145,9 +145,57 @@ pub struct MessageDescriptor {
 }
 
 impl MessageDescriptor {
-    /// Look up a field by its wire number (used by the decoder).
+    /// Look up a field by its wire number by scanning. The decoder goes
+    /// through the precomputed [`FieldIndex`] instead; this stays as the
+    /// reference implementation for tests.
+    #[cfg(test)]
     pub fn field_by_number(&self, number: u32) -> Option<&FieldDescriptor> {
         self.fields.iter().find(|f| f.number == number)
+    }
+}
+
+/// Precomputed field-number -> field-index lookup, built once per message so
+/// the decoder resolves each incoming tag in O(1) instead of scanning.
+pub enum FieldIndex {
+    /// Direct table for compact numbering: `table[number] = index + 1`,
+    /// 0 = no such field.
+    Dense(Vec<u32>),
+    /// Sorted `(number, index)` pairs for sparse numbering.
+    Sparse(Vec<(u32, u32)>),
+}
+
+impl FieldIndex {
+    pub fn build(fields: &[FieldDescriptor]) -> FieldIndex {
+        let max = fields.iter().map(|f| f.number).max().unwrap_or(0) as usize;
+        if max <= (fields.len() * 4).max(64) {
+            let mut table = vec![0u32; max + 1];
+            for (i, f) in fields.iter().enumerate() {
+                table[f.number as usize] = i as u32 + 1;
+            }
+            FieldIndex::Dense(table)
+        } else {
+            let mut pairs: Vec<(u32, u32)> = fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (f.number, i as u32))
+                .collect();
+            pairs.sort_unstable();
+            FieldIndex::Sparse(pairs)
+        }
+    }
+
+    /// The index into `fields` of the field with this wire number, if any.
+    pub fn get(&self, number: u32) -> Option<usize> {
+        match self {
+            FieldIndex::Dense(table) => match table.get(number as usize) {
+                Some(&slot) if slot != 0 => Some(slot as usize - 1),
+                _ => None,
+            },
+            FieldIndex::Sparse(pairs) => pairs
+                .binary_search_by_key(&number, |&(n, _)| n)
+                .ok()
+                .map(|i| pairs[i].1 as usize),
+        }
     }
 }
 

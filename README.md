@@ -202,6 +202,36 @@ assert User(phone="1").which_oneof("contact") == "phone"
 User(phone="1", telegram="a").to_bytes()  # ValueError: ... oneof ...
 ```
 
+## Performance
+
+Protobuf runtimes pay the cost of turning bytes into Python objects either at
+decode time or at access time, so decode-only microbenchmarks tell half the
+story. Google's default backend (`upb`) parses into C structs and converts to
+Python lazily — decoding looks instant, but **every** field access pays a
+C-to-Python conversion, every time. FastProto materializes plain Python values
+once at decode; after that a field read is an ordinary attribute load.
+
+On a mid-size message (509 B: strings, nested messages, maps, repeated fields,
+enums — Apple M-series, CPython 3.14, `bench/compare.py`):
+
+| scenario | fastproto | google protobuf (upb) |
+|---|---|---:|
+| decode only | 4.3 µs | **1.9 µs** |
+| decode, then read every field | **5.9 µs** | 8.9 µs |
+| read every field of a decoded message | **1.5 µs** | 6.7 µs |
+| encode | 2.4 µs | **0.9 µs** |
+
+So: if you decode messages and barely look inside (relays, routers), upb's
+lazy model wins the raw numbers. The moment you *use* what you decoded, the
+conversion bill comes due on their side — and it comes due again on every
+re-read — while FastProto's fields are just dataclass attributes. The encode
+gap is the honest price of that interface: FastProto reads live attributes off
+a plain Python object, upb serializes C memory it already owns. That price
+buys messages your editor, type checker, and `repr()` treat as ordinary
+dataclasses.
+
+Reproduce with `uv run --with protobuf python bench/compare.py`.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, project layout, and the

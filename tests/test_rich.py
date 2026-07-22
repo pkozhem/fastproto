@@ -205,3 +205,43 @@ def test_wire_compatible_with_reference() -> None:
     roundtripped = User.from_bytes(user.to_bytes() + unknown_chunk).to_bytes()
     ref.ParseFromString(roundtripped)
     assert ref.id == 7  # known fields intact alongside the unknown one
+
+
+def test_long_nested_message_roundtrip() -> None:
+    # A nested message longer than 127 bytes needs a multi-byte length prefix,
+    # exercising the in-place length patching (payload shift) in the encoder.
+    user = User(address=Address(city="c" * 200, street="s" * 300))
+    decoded = User.from_bytes(user.to_bytes())
+    assert decoded == user
+
+
+def test_repeated_accepts_tuples_and_generators() -> None:
+    # Repeated fields are usually lists (the fast path), but any iterable of
+    # elements must keep working.
+    by_list = User(tags=["a", "b"], scores=[1, 2]).to_bytes()
+    tags: Any = ("a", "b")
+    scores: Any = (1, 2)
+    assert User(tags=tags, scores=scores).to_bytes() == by_list
+    gen_tags: Any = (t for t in ["a", "b"])
+    gen_scores: Any = (s for s in [1, 2])
+    assert User(tags=gen_tags, scores=gen_scores).to_bytes() == by_list
+
+
+def test_subclass_custom_init_is_honored_on_decode() -> None:
+    # A plain subclass shares the parent's descriptor; decode must construct
+    # it through its own __init__ (no fast-path bypass).
+    calls: list[str] = []
+
+    class TrackedUser(User):
+        def __init__(self, **kwargs: Any) -> None:
+            calls.append("init")
+            super().__init__(**kwargs)
+
+    data = User(id=5, name="n").to_bytes()
+    # Parent decodes may use the fast path...
+    assert User.from_bytes(data).id == 5
+    # ...but the subclass goes through its custom __init__.
+    decoded = TrackedUser.from_bytes(data)
+    assert calls == ["init"]
+    assert decoded.id == 5
+    assert decoded.name == "n"

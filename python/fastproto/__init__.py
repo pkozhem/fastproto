@@ -6,6 +6,7 @@ class to the native (de)serialization engine.
 """
 
 import sys
+from dataclasses import MISSING
 from typing import TYPE_CHECKING, Annotated, ClassVar, Self, cast, override
 
 from ._core import compile_descriptor
@@ -37,16 +38,33 @@ class Message:
     __slots__ = ("_fastproto_unknown",)
     __fastproto__: "ClassVar[Descriptor]"
 
+    def __post_init__(self) -> None:
+        """Initialize the unknown-fields slot.
+
+        Generated ``@dataclass`` ``__init__`` methods call this automatically.
+        An initialized slot keeps the encoder's per-call read of it a plain
+        attribute hit; on instances without it (hand-rolled subclasses that
+        never run ``__init__``) the encoder falls back to catching
+        ``AttributeError``, which is correct but measurably slower.
+        """
+        self._fastproto_unknown = b""
+
     def to_bytes(self) -> bytes:
         """Serialize this message to protobuf wire bytes."""
-        _ensure_linked(type(self))
-        return self.__fastproto__.encode(self)
+        # The linked check is inlined (rather than always calling
+        # _ensure_linked) to keep the steady-state path to one native call.
+        descriptor = self.__fastproto__
+        if not descriptor.is_linked:
+            _ensure_linked(type(self))
+        return descriptor.encode(self)
 
     @classmethod
     def from_bytes(cls, data: bytes) -> Self:
         """Deserialize protobuf wire bytes into a new instance of ``cls``."""
-        _ensure_linked(cls)
-        return cls.__fastproto__.decode(cls, data)
+        descriptor = cls.__fastproto__
+        if not descriptor.is_linked:
+            _ensure_linked(cls)
+        return descriptor.decode(cls, data)
 
     def which_oneof(self, name: str) -> str | None:
         """Return the set member of oneof group ``name``, or ``None`` if unset.
@@ -151,6 +169,47 @@ def _resolve(namespace: dict[str, object], qualified: str) -> type:
     raise LookupError(msg)
 
 
+def _fast_init_defaults(cls: type[Message]) -> "list[object] | None":
+    """Dataclass default objects per field, if decode may bypass ``__init__``.
+
+    The fast path constructs instances with ``__new__`` + setattr, so it is
+    only observably equivalent for a plain generated dataclass: default
+    construction machinery, no custom ``__post_init__``, dataclass fields that
+    mirror the descriptor's fields exactly (same names, same order), and a
+    plain default on every field. Anything else returns ``None`` and decode
+    calls the class normally. The returned defaults are the very objects
+    ``__init__`` would assign, so absent wire fields decode identically on
+    both paths. Entries for ``default_factory`` fields (repeated/map) are
+    ``None`` placeholders — the decoder always builds those accumulators.
+    """
+    params = getattr(cls, "__dataclass_params__", None)
+    fields = getattr(cls, "__dataclass_fields__", None)
+    if params is None or fields is None:
+        return None
+    supported = (
+        # The class must be a dataclass itself, not merely inherit one: a
+        # plain subclass shares the parent's descriptor but may add its own
+        # __init__, which only the normal construction path would run.
+        "__dataclass_fields__" in cls.__dict__
+        and not params.frozen
+        and type(cls).__call__ is type.__call__
+        and cls.__new__ is object.__new__
+        and getattr(cls, "__post_init__", None) is Message.__post_init__
+        and list(fields) == cls.__fastproto__.field_names()
+    )
+    if not supported:
+        return None
+    defaults: list[object] = []
+    for f in fields.values():
+        if f.init and f.default is not MISSING:
+            defaults.append(f.default)
+        elif f.init and f.default_factory in (list, dict):
+            defaults.append(None)  # pre-created by the decoder, never consulted
+        else:
+            return None
+    return defaults
+
+
 def _ensure_linked(cls: type[Message]) -> None:
     """Resolve enum/message references for ``cls`` and the classes it references.
 
@@ -162,14 +221,18 @@ def _ensure_linked(cls: type[Message]) -> None:
     if descriptor.is_linked:
         return
 
+    defaults = _fast_init_defaults(cls)
+    fast_init = None if defaults is None else (cls, defaults)
+
     references = descriptor.ref_fields()
     if not references:
-        descriptor.link({})  # no enum/message fields — nothing to resolve
+        # no enum/message fields — nothing to resolve
+        descriptor.link({}, fast_init)
         return
 
     namespace = vars(sys.modules[cls.__module__])
     resolved = {number: _resolve(namespace, name) for number, name in references}
-    descriptor.link(resolved)
+    descriptor.link(resolved, fast_init)
 
     for target in resolved.values():
         if hasattr(target, "__fastproto__"):
