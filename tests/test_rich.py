@@ -245,3 +245,22 @@ def test_subclass_custom_init_is_honored_on_decode() -> None:
     assert calls == ["init"]
     assert decoded.id == 5
     assert decoded.name == "n"
+
+
+def test_frozen_message_roundtrips() -> None:
+    # A frozen dataclass rejects plain attribute assignment, so the base
+    # __post_init__ must write the unknown-fields slot through `object`.
+    from dataclasses import dataclass
+
+    from fastproto import Message, Scalar, message
+    from tests.generated.rich_pb import _ADDRESS_DESCRIPTOR
+
+    @message(_ADDRESS_DESCRIPTOR)
+    @dataclass(slots=True, frozen=True)
+    class FrozenAddress(Message):
+        city: Scalar.String = ""
+        street: Scalar.String = ""
+
+    addr = FrozenAddress(city="London", street="Baker St")
+    assert addr.to_bytes() == Address(city="London", street="Baker St").to_bytes()
+    assert FrozenAddress.from_bytes(addr.to_bytes()) == addr

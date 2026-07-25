@@ -46,8 +46,15 @@ class Message:
         attribute hit; on instances without it (hand-rolled subclasses that
         never run ``__init__``) the encoder falls back to catching
         ``AttributeError``, which is correct but measurably slower.
+
+        A ``frozen=True`` message rejects the plain assignment, so the fallback
+        writes through ``object`` — kept in the exception path because the
+        ``try`` itself is free on the common (mutable) one.
         """
-        self._fastproto_unknown = b""
+        try:
+            self._fastproto_unknown = b""
+        except (AttributeError, TypeError):
+            object.__setattr__(self, "_fastproto_unknown", b"")
 
     def to_bytes(self) -> bytes:
         """Serialize this message to protobuf wire bytes."""
