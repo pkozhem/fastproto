@@ -23,6 +23,7 @@ use crate::wellknown;
 use crate::wire::{self, Reader, WireError, WireType};
 
 static OBJECT_NEW: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
+static OBJECT_SETATTR: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
 
 /// `object.__new__`, used by the fast construction path to allocate an
 /// instance without running `__init__`.
@@ -33,6 +34,28 @@ fn object_new(py: Python<'_>) -> PyResult<&Py<PyAny>> {
             .getattr("__new__")
             .map(Bound::unbind)
     })
+}
+
+/// Store the raw unknown-field bytes on the instance.
+///
+/// A `frozen=True` message rejects ordinary attribute assignment, so fall back
+/// to `object.__setattr__` — the slot is library bookkeeping, not part of the
+/// user's frozen value.
+fn set_unknown(py: Python<'_>, instance: &Bound<'_, PyAny>, unknown: &[u8]) -> PyResult<()> {
+    let name = pyo3::intern!(py, "_fastproto_unknown");
+    let value = PyBytes::new(py, unknown);
+    match instance.setattr(name, &value) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            let setattr = OBJECT_SETATTR.get_or_try_init(py, || {
+                py.import("builtins")?
+                    .getattr("object")?
+                    .getattr("__setattr__")
+                    .map(Bound::unbind)
+            })?;
+            setattr.bind(py).call1((instance, name, value)).map(|_| ())
+        }
+    }
 }
 
 /// Decode `data` into a new instance of `cls` according to `desc`.
@@ -121,7 +144,11 @@ pub fn decode_message<'py>(
         }
 
         // A oneof member about to be set clears any earlier member of its group.
-        if let Some(group) = field.oneof_index {
+        // Only single-valued members take part: a repeated/map field's slot
+        // holds an accumulator the branches below unwrap, so clearing it would
+        // panic. protoc cannot put those in a oneof, but a hand-crafted
+        // descriptor can, and malformed descriptors must not panic.
+        if let (Some(group), Label::Optional) = (field.oneof_index, field.label) {
             if let Some(prev) = oneof_owner.insert(group, idx) {
                 if prev != idx {
                     values[prev] = None;
@@ -199,10 +226,7 @@ pub fn decode_message<'py>(
     }
     let instance = cls.call((), Some(&kwargs))?;
     if !unknown.is_empty() {
-        instance.setattr(
-            pyo3::intern!(py, "_fastproto_unknown"),
-            PyBytes::new(py, &unknown),
-        )?;
+        set_unknown(py, &instance, &unknown)?;
     }
     Ok(instance)
 }
@@ -232,10 +256,7 @@ fn construct_fast<'py>(
     }
     // Always fill the unknown-fields slot: encode reads it on every call, and
     // a set slot keeps that read exception-free.
-    instance.setattr(
-        pyo3::intern!(py, "_fastproto_unknown"),
-        PyBytes::new(py, unknown),
-    )?;
+    set_unknown(py, &instance, unknown)?;
     Ok(instance)
 }
 

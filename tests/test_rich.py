@@ -264,3 +264,111 @@ def test_frozen_message_roundtrips() -> None:
     addr = FrozenAddress(city="London", street="Baker St")
     assert addr.to_bytes() == Address(city="London", street="Baker St").to_bytes()
     assert FrozenAddress.from_bytes(addr.to_bytes()) == addr
+
+
+def test_frozen_message_preserves_unknown_fields() -> None:
+    # Decode writes the unknown-fields slot through `object` so a frozen
+    # message can carry forward fields its schema doesn't know.
+    from dataclasses import dataclass
+
+    from fastproto import Message, Scalar, message
+    from tests.generated.rich_pb import _ADDRESS_DESCRIPTOR
+
+    @message(_ADDRESS_DESCRIPTOR)
+    @dataclass(slots=True, frozen=True)
+    class FrozenAddress(Message):
+        city: Scalar.String = ""
+        street: Scalar.String = ""
+
+    payload = FrozenAddress(city="C").to_bytes() + b"\x98\x06\x2a"  # field 99
+    assert FrozenAddress.from_bytes(payload).to_bytes() == payload
+
+
+def test_malformed_descriptor_shapes_do_not_panic() -> None:
+    # protoc cannot emit these, but a hand-crafted descriptor blob can, and the
+    # native codec must fail gracefully (or cope) rather than panic.
+    from dataclasses import dataclass
+    from dataclasses import field as dc_field
+
+    from google.protobuf.descriptor_pb2 import DescriptorProto, FieldDescriptorProto
+
+    from fastproto import Message, Scalar, message
+
+    # A repeated field inside a oneof: the group's "last one wins" clearing
+    # must skip it instead of dropping the accumulator it later unwraps.
+    dp = DescriptorProto(name="RepeatedInOneof")
+    dp.oneof_decl.add(name="grp")
+    dp.field.add(
+        name="items",
+        number=1,
+        type=FieldDescriptorProto.TYPE_INT64,
+        label=FieldDescriptorProto.LABEL_REPEATED,
+        oneof_index=0,
+    )
+    dp.field.add(
+        name="other",
+        number=2,
+        type=FieldDescriptorProto.TYPE_INT64,
+        label=FieldDescriptorProto.LABEL_OPTIONAL,
+        oneof_index=0,
+    )
+
+    @message(dp.SerializeToString())
+    @dataclass(slots=True)
+    class RepeatedInOneof(Message):
+        items: list[Scalar.Int64] = dc_field(default_factory=list)
+        other: Scalar.Int64 | None = None
+
+    assert RepeatedInOneof.from_bytes(b"\x08\x01\x10\x02\x08\x03").items == [1, 3]
+
+    # Duplicate field numbers resolve to the first declaration, as a linear
+    # scan over the field list would.
+    dup = DescriptorProto(name="Dup")
+    dup.field.add(
+        name="a",
+        number=1,
+        type=FieldDescriptorProto.TYPE_INT64,
+        label=FieldDescriptorProto.LABEL_OPTIONAL,
+    )
+    dup.field.add(
+        name="b",
+        number=1,
+        type=FieldDescriptorProto.TYPE_INT64,
+        label=FieldDescriptorProto.LABEL_OPTIONAL,
+    )
+
+    @message(dup.SerializeToString())
+    @dataclass(slots=True)
+    class Dup(Message):
+        a: Scalar.Int64 | None = None
+        b: Scalar.Int64 | None = None
+
+    decoded = Dup.from_bytes(b"\x08\x09")
+    assert (decoded.a, decoded.b) == (9, None)
+
+
+def test_fast_init_requires_the_descriptor_to_agree_on_collections() -> None:
+    # A placeholder default is only safe for fields the decoder pre-creates an
+    # accumulator for; a dataclass that disagrees with its descriptor must fall
+    # back to the normal constructor rather than decode a bare None.
+    from dataclasses import dataclass
+    from dataclasses import field as dc_field
+
+    from google.protobuf.descriptor_pb2 import DescriptorProto, FieldDescriptorProto
+
+    from fastproto import Message, message
+
+    dp = DescriptorProto(name="Mismatch")
+    dp.field.add(
+        name="a",
+        number=1,
+        type=FieldDescriptorProto.TYPE_INT64,
+        label=FieldDescriptorProto.LABEL_OPTIONAL,
+    )
+
+    @message(dp.SerializeToString())
+    @dataclass(slots=True)
+    class Mismatch(Message):
+        a: list = dc_field(default_factory=list)
+
+    assert Mismatch.from_bytes(b"") == Mismatch()

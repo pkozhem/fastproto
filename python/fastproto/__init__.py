@@ -206,11 +206,15 @@ def _fast_init_defaults(cls: type[Message]) -> "list[object] | None":
     )
     if not supported:
         return None
+    # Only the fields the decoder builds an accumulator for may carry a
+    # placeholder default; for anything else the stored object is what an
+    # absent field decodes to, so it has to be the real one.
+    collections = set(cls.__fastproto__.collection_fields())
     defaults: list[object] = []
-    for f in fields.values():
+    for idx, f in enumerate(fields.values()):
         if f.init and f.default is not MISSING:
             defaults.append(f.default)
-        elif f.init and f.default_factory in (list, dict):
+        elif f.init and f.default_factory in (list, dict) and idx in collections:
             defaults.append(None)  # pre-created by the decoder, never consulted
         else:
             return None

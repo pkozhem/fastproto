@@ -23,7 +23,7 @@ use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyBytes, PyDict, PyString, PyTuple, PyType};
 
-use crate::descriptor::{FieldIndex, FieldKind, MapValue, MessageDescriptor};
+use crate::descriptor::{FieldIndex, FieldKind, Label, MapValue, MessageDescriptor};
 use crate::{decode, encode, parse};
 
 /// How many low enum values the direct member table covers. Proto enums are
@@ -125,6 +125,19 @@ impl Descriptor {
     /// verify a dataclass matches the descriptor before enabling fast init.
     fn field_names(&self) -> Vec<String> {
         self.inner.fields.iter().map(|f| f.name.clone()).collect()
+    }
+
+    /// Indexes of the fields the decoder always builds an accumulator for
+    /// (repeated lists and maps). Only these may carry a placeholder in the
+    /// `fast_init` defaults, since their slot is never read from there.
+    fn collection_fields(&self) -> Vec<usize> {
+        self.inner
+            .fields
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| matches!(f.kind, FieldKind::Map { .. }) || f.label == Label::Repeated)
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// `(field_number, qualified_type_name)` for every field that references

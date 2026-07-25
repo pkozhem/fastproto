@@ -167,10 +167,16 @@ pub enum FieldIndex {
 impl FieldIndex {
     pub fn build(fields: &[FieldDescriptor]) -> FieldIndex {
         let max = fields.iter().map(|f| f.number).max().unwrap_or(0) as usize;
+        // A duplicate field number is invalid protobuf, but a hand-crafted
+        // descriptor can carry one; keep the first declaration in that case,
+        // matching a linear scan over `fields`.
         if max <= (fields.len() * 4).max(64) {
             let mut table = vec![0u32; max + 1];
             for (i, f) in fields.iter().enumerate() {
-                table[f.number as usize] = i as u32 + 1;
+                let slot = &mut table[f.number as usize];
+                if *slot == 0 {
+                    *slot = i as u32 + 1;
+                }
             }
             FieldIndex::Dense(table)
         } else {
@@ -179,7 +185,10 @@ impl FieldIndex {
                 .enumerate()
                 .map(|(i, f)| (f.number, i as u32))
                 .collect();
+            // Sorted by (number, index), so deduping by number keeps the
+            // lowest index -- the first declaration.
             pairs.sort_unstable();
+            pairs.dedup_by_key(|&mut (number, _)| number);
             FieldIndex::Sparse(pairs)
         }
     }
