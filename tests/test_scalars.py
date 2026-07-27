@@ -130,3 +130,14 @@ def test_scalar_annotations_are_transparent() -> None:
     assert repr(meta) == "proto:int64"
     base, _ = get_args(Scalar.String)
     assert base is str
+
+
+def test_float_presence_follows_the_stored_precision() -> None:
+    # proto3 implicit presence tests the value as stored on the wire, so a
+    # double that underflows to zero in a `float` field is omitted while the
+    # same literal survives in a `double` field. Both match google's runtime.
+    assert AllScalars(temperature=1e-50).to_bytes() == b""
+    assert AllScalars(ratio=1e-50).to_bytes() != b""
+    # -0.0 is not the default (google keeps the sign), so it is emitted.
+    assert AllScalars(temperature=-0.0).to_bytes() == b"\x15\x00\x00\x00\x80"
+    assert AllScalars(ratio=-0.0).to_bytes() == b"\t\x00\x00\x00\x00\x00\x00\x00\x80"

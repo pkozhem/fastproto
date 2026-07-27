@@ -13,6 +13,7 @@ name = "fastproto"
 crate-type = ["cdylib"]
 
 [dependencies]
+mimalloc = { version = "0.1.52", optional = true }
 # abi3-py312: build a single stable-ABI wheel that works on CPython 3.12+
 # (and future versions) without recompiling per Python release.
 pyo3 = { version = "0.25.0", features = ["abi3-py312"] }
@@ -21,3 +22,13 @@ pyo3 = { version = "0.25.0", features = ["abi3-py312"] }
 # Property-based tests for the Python-free layers (wire, parse): arbitrary
 # bytes must never panic the parser. Runs as part of `cargo test`.
 proptest = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[features]
+# Opt-in: route Rust-side allocations through mimalloc. Measured ~0-5% on
+# alloc-heavy decode paths (macOS); the hot paths are mostly allocation-free,
+# so this is off by default to keep the wheel build dependency-light.
+mimalloc = ["dep:mimalloc"]

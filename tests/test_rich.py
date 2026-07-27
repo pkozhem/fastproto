@@ -205,3 +205,170 @@ def test_wire_compatible_with_reference() -> None:
     roundtripped = User.from_bytes(user.to_bytes() + unknown_chunk).to_bytes()
     ref.ParseFromString(roundtripped)
     assert ref.id == 7  # known fields intact alongside the unknown one
+
+
+def test_long_nested_message_roundtrip() -> None:
+    # A nested message longer than 127 bytes needs a multi-byte length prefix,
+    # exercising the in-place length patching (payload shift) in the encoder.
+    user = User(address=Address(city="c" * 200, street="s" * 300))
+    decoded = User.from_bytes(user.to_bytes())
+    assert decoded == user
+
+
+def test_repeated_accepts_tuples_and_generators() -> None:
+    # Repeated fields are usually lists (the fast path), but any iterable of
+    # elements must keep working.
+    by_list = User(tags=["a", "b"], scores=[1, 2]).to_bytes()
+    tags: Any = ("a", "b")
+    scores: Any = (1, 2)
+    assert User(tags=tags, scores=scores).to_bytes() == by_list
+    gen_tags: Any = (t for t in ["a", "b"])
+    gen_scores: Any = (s for s in [1, 2])
+    assert User(tags=gen_tags, scores=gen_scores).to_bytes() == by_list
+
+
+def test_subclass_custom_init_is_honored_on_decode() -> None:
+    # A plain subclass shares the parent's descriptor; decode must construct
+    # it through its own __init__ (no fast-path bypass).
+    calls: list[str] = []
+
+    class TrackedUser(User):
+        def __init__(self, **kwargs: Any) -> None:
+            calls.append("init")
+            super().__init__(**kwargs)
+
+    data = User(id=5, name="n").to_bytes()
+    # Parent decodes may use the fast path...
+    assert User.from_bytes(data).id == 5
+    # ...but the subclass goes through its custom __init__.
+    decoded = TrackedUser.from_bytes(data)
+    assert calls == ["init"]
+    assert decoded.id == 5
+    assert decoded.name == "n"
+
+
+def test_frozen_message_roundtrips() -> None:
+    # A frozen dataclass rejects plain attribute assignment, so the base
+    # __post_init__ must write the unknown-fields slot through `object`.
+    from dataclasses import dataclass
+
+    from fastproto import Message, Scalar, message
+    from tests.generated.rich_pb import _ADDRESS_DESCRIPTOR
+
+    @message(_ADDRESS_DESCRIPTOR)
+    @dataclass(slots=True, frozen=True)
+    class FrozenAddress(Message):
+        city: Scalar.String = ""
+        street: Scalar.String = ""
+
+    addr = FrozenAddress(city="London", street="Baker St")
+    assert addr.to_bytes() == Address(city="London", street="Baker St").to_bytes()
+    assert FrozenAddress.from_bytes(addr.to_bytes()) == addr
+
+
+def test_frozen_message_preserves_unknown_fields() -> None:
+    # Decode writes the unknown-fields slot through `object` so a frozen
+    # message can carry forward fields its schema doesn't know.
+    from dataclasses import dataclass
+
+    from fastproto import Message, Scalar, message
+    from tests.generated.rich_pb import _ADDRESS_DESCRIPTOR
+
+    @message(_ADDRESS_DESCRIPTOR)
+    @dataclass(slots=True, frozen=True)
+    class FrozenAddress(Message):
+        city: Scalar.String = ""
+        street: Scalar.String = ""
+
+    payload = FrozenAddress(city="C").to_bytes() + b"\x98\x06\x2a"  # field 99
+    assert FrozenAddress.from_bytes(payload).to_bytes() == payload
+
+
+def test_malformed_descriptor_shapes_do_not_panic() -> None:
+    # protoc cannot emit these, but a hand-crafted descriptor blob can, and the
+    # native codec must fail gracefully (or cope) rather than panic.
+    from dataclasses import dataclass
+    from dataclasses import field as dc_field
+
+    from google.protobuf.descriptor_pb2 import DescriptorProto, FieldDescriptorProto
+
+    from fastproto import Message, Scalar, message
+
+    # A repeated field inside a oneof: the group's "last one wins" clearing
+    # must skip it instead of dropping the accumulator it later unwraps.
+    dp = DescriptorProto(name="RepeatedInOneof")
+    dp.oneof_decl.add(name="grp")
+    dp.field.add(
+        name="items",
+        number=1,
+        type=FieldDescriptorProto.TYPE_INT64,
+        label=FieldDescriptorProto.LABEL_REPEATED,
+        oneof_index=0,
+    )
+    dp.field.add(
+        name="other",
+        number=2,
+        type=FieldDescriptorProto.TYPE_INT64,
+        label=FieldDescriptorProto.LABEL_OPTIONAL,
+        oneof_index=0,
+    )
+
+    @message(dp.SerializeToString())
+    @dataclass(slots=True)
+    class RepeatedInOneof(Message):
+        items: list[Scalar.Int64] = dc_field(default_factory=list)
+        other: Scalar.Int64 | None = None
+
+    assert RepeatedInOneof.from_bytes(b"\x08\x01\x10\x02\x08\x03").items == [1, 3]
+
+    # Duplicate field numbers resolve to the first declaration, as a linear
+    # scan over the field list would.
+    dup = DescriptorProto(name="Dup")
+    dup.field.add(
+        name="a",
+        number=1,
+        type=FieldDescriptorProto.TYPE_INT64,
+        label=FieldDescriptorProto.LABEL_OPTIONAL,
+    )
+    dup.field.add(
+        name="b",
+        number=1,
+        type=FieldDescriptorProto.TYPE_INT64,
+        label=FieldDescriptorProto.LABEL_OPTIONAL,
+    )
+
+    @message(dup.SerializeToString())
+    @dataclass(slots=True)
+    class Dup(Message):
+        a: Scalar.Int64 | None = None
+        b: Scalar.Int64 | None = None
+
+    decoded = Dup.from_bytes(b"\x08\x09")
+    assert (decoded.a, decoded.b) == (9, None)
+
+
+def test_fast_init_requires_the_descriptor_to_agree_on_collections() -> None:
+    # A placeholder default is only safe for fields the decoder pre-creates an
+    # accumulator for; a dataclass that disagrees with its descriptor must fall
+    # back to the normal constructor rather than decode a bare None.
+    from dataclasses import dataclass
+    from dataclasses import field as dc_field
+
+    from google.protobuf.descriptor_pb2 import DescriptorProto, FieldDescriptorProto
+
+    from fastproto import Message, message
+
+    dp = DescriptorProto(name="Mismatch")
+    dp.field.add(
+        name="a",
+        number=1,
+        type=FieldDescriptorProto.TYPE_INT64,
+        label=FieldDescriptorProto.LABEL_OPTIONAL,
+    )
+
+    @message(dp.SerializeToString())
+    @dataclass(slots=True)
+    class Mismatch(Message):
+        a: list = dc_field(default_factory=list)
+
+    assert Mismatch.from_bytes(b"") == Mismatch()
