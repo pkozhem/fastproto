@@ -212,7 +212,7 @@ C-to-Python conversion, every time. FastProto materializes plain Python values
 once at decode; after that a field read is an ordinary attribute load.
 
 On a mid-size message (509 B: strings, nested messages, maps, repeated fields,
-enums — Apple M-series, CPython 3.14, `bench/compare.py`):
+enums — Apple M-series, CPython 3.14):
 
 | scenario | fastproto | google protobuf (upb) |
 |---|---|---:|
