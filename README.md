@@ -230,8 +230,6 @@ a plain Python object, upb serializes C memory it already owns. That price
 buys messages your editor, type checker, and `repr()` treat as ordinary
 dataclasses.
 
-Reproduce with `uv run --with protobuf python bench/compare.py`.
-
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, project layout, and the

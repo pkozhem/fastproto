@@ -102,8 +102,9 @@ uv run cz check --rev HEAD # validate the latest commit
 
 ## Pull requests
 
-- `main` is protected: **no direct pushes** — everything goes through a PR.
-- Branch, commit, push, and open a PR:
+- `main` is protected: **no direct pushes** — changes come in through a fork
+  and a pull request.
+- From your fork, branch off, commit, push, and open a PR against `main`:
   ```bash
   git switch -c my-change
   # ... changes ...
