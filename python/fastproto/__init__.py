@@ -10,9 +10,10 @@ from dataclasses import MISSING
 from typing import TYPE_CHECKING, Annotated, ClassVar, Self, cast, override
 
 from ._core import compile_descriptor
+from ._dict import from_dict, to_dict
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from ._core import Descriptor
 
@@ -86,6 +87,24 @@ class Message:
         available = [group for group, _ in self.__fastproto__.oneofs()]
         msg = f"{type(self).__name__!r} has no oneof group {name!r}; got {available}"
         raise ValueError(msg)
+
+    def to_dict(self) -> dict[str, object]:
+        """Recursively convert this message to a native Python dict.
+
+        Every field is present; unset optional/message/oneof fields are ``None``.
+        Values stay native (``IntEnum``/``datetime``/``timedelta``/``bytes`` as-is),
+        so the result is for in-process use, not JSON. See :mod:`fastproto._dict`.
+        """
+        return to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: "Mapping[str, object]") -> Self:
+        """Rebuild an instance from a dict produced by :meth:`to_dict`.
+
+        A missing key uses the field's default; an unknown key raises
+        :class:`ValueError`. Guarantees ``cls.from_dict(x.to_dict()) == x``.
+        """
+        return from_dict(cls, data)
 
 
 class _ScalarMeta:

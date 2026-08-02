@@ -38,6 +38,7 @@ _GENERATED_NAMES = frozenset(
 _RESERVED_FIELD_NAMES = frozenset(
     {
         "to_bytes", "from_bytes", "which_oneof",  # Message API
+        "to_dict", "from_dict",  # Message API (dict conversion)
         "_fastproto_unknown", "__fastproto__",  # Message slots / descriptor
         "field", "Scalar", "datetime", "timedelta",  # re-read in the class body
     },

@@ -194,6 +194,9 @@ No `SerializeToString()` / `ParseFromString()` ceremony and no reflection — ju
   protobuf's sub-microsecond precision (nanos) is truncated to microseconds.
 - **References:** sibling, self, nested, and enum references resolve lazily on the
   first `to_bytes()` / `from_bytes()` — nothing for you to wire up.
+- **Dicts:** you can create a message object by using `from_dict()` method. Also
+  there is a possibility to convert a message to python `dict` object by using
+  `to_dict()` method.
 
 ```python
 empty = User()
@@ -212,7 +215,7 @@ C-to-Python conversion, every time. FastProto materializes plain Python values
 once at decode; after that a field read is an ordinary attribute load.
 
 On a mid-size message (509 B: strings, nested messages, maps, repeated fields,
-enums — Apple M-series, CPython 3.14, `bench/compare.py`):
+enums — Apple M-series, CPython 3.14):
 
 | scenario | fastproto | google protobuf (upb) |
 |---|---|---:|
@@ -229,8 +232,6 @@ gap is the honest price of that interface: FastProto reads live attributes off
 a plain Python object, upb serializes C memory it already owns. That price
 buys messages your editor, type checker, and `repr()` treat as ordinary
 dataclasses.
-
-Reproduce with `uv run --with protobuf python bench/compare.py`.
 
 ## Contributing
 

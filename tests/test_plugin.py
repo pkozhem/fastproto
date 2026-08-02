@@ -103,10 +103,14 @@ def test_keyword_field_name_is_reported() -> None:
     assert not response.file
 
 
-def test_reserved_field_name_is_reported() -> None:
-    # A field shadowing the Message API would break to_bytes() at runtime.
-    response = plugin.generate(_single_field_request(field_name="to_bytes"))
-    assert "to_bytes" in response.error
+@pytest.mark.parametrize(
+    "name",
+    ["to_bytes", "from_bytes", "which_oneof", "to_dict", "from_dict"],
+)
+def test_reserved_field_name_is_reported(name: str) -> None:
+    # A field shadowing the Message API would break that method at runtime.
+    response = plugin.generate(_single_field_request(field_name=name))
+    assert name in response.error
     assert not response.file
 
 
