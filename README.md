@@ -194,6 +194,9 @@ No `SerializeToString()` / `ParseFromString()` ceremony and no reflection — ju
   protobuf's sub-microsecond precision (nanos) is truncated to microseconds.
 - **References:** sibling, self, nested, and enum references resolve lazily on the
   first `to_bytes()` / `from_bytes()` — nothing for you to wire up.
+- **Dicts:** you can create a message object by using `from_dict()` method. Also
+  there is a possibility to convert a message to python `dict` object by using
+  `to_dict()` method.
 
 ```python
 empty = User()
