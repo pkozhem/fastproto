@@ -11,14 +11,14 @@
 //! field 2 = `nanos` (varint).
 
 use pyo3::prelude::*;
-use pyo3::sync::GILOnceCell;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::PyDict;
 
 use crate::wire::{self, Reader, WireType};
 
-static EPOCH: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
-static TIMEDELTA: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
-static UTC: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
+static EPOCH: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static TIMEDELTA: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static UTC: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 const NANOS_PER_SECOND: i128 = 1_000_000_000;
 

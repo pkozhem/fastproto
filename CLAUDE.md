@@ -51,8 +51,8 @@ The environment is `.venv` (created by `uv sync`). Run the full gate with the
 
 ```bash
 VIRTUAL_ENV=.venv .venv/bin/maturin develop      # rebuild Rust after changes in src/
-cargo test
-cargo clippy --all-targets -- -D warnings
+uv run cargo test                                  # via uv: plain cargo may pick a system
+uv run cargo clippy --all-targets -- -D warnings   #   Python < 3.12 and fail in pyo3
 cargo fmt --check                                  # rustfmt is enforced in CI
 .venv/bin/ruff check python tests scripts
 .venv/bin/ruff format --check python tests scripts

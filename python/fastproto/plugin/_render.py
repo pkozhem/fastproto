@@ -236,7 +236,7 @@ class ModuleRenderer:
             "\n".join(
                 [
                     f"{const} = bytes.fromhex(  # @generated",
-                    f'    "{msg.SerializeToString().hex()}"',
+                    f'    "{msg.SerializeToString().hex()}",',
                     ")",
                 ],
             ),

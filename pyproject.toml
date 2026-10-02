@@ -58,12 +58,20 @@ select = ["ALL"]
 ignore = [
     "D203", # incompatible with D211 (no blank line before class docstring)
     "D213", # incompatible with D212 (summary on the first line)
+    "D101", # missing docstring in public class
+    "ERA001", # found commented-out code
+    "INP001",
+    "D100",
+    "CPY001", # per-file copyright headers; the license lives in LICENSE
 ]
 
 [tool.ruff.lint.pydocstyle]
 convention = "pep257"
 
 [tool.ruff.lint.per-file-ignores]
+"**/*_pb.py" = [
+    "RUF009", # generated enum defaults are calls (`role: Role = Role(0)`)
+]
 "tests/**" = [
     "ANN",     # tests need no annotations
     "D",       # tests need no docstrings

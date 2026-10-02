@@ -117,10 +117,10 @@ pub fn encode_message(
 /// Reading the buffer directly is a plain memory borrow. The caller must copy
 /// out before returning to Python (no arbitrary Python runs in between here).
 fn byte_slice<'a>(value: &'a Bound<'_, PyAny>) -> PyResult<&'a [u8]> {
-    if let Ok(b) = value.downcast::<PyBytes>() {
+    if let Ok(b) = value.cast::<PyBytes>() {
         return Ok(b.as_bytes());
     }
-    if let Ok(ba) = value.downcast::<PyByteArray>() {
+    if let Ok(ba) = value.cast::<PyByteArray>() {
         // SAFETY: the returned slice is consumed synchronously by the caller
         // (copied into the output buffer) with no intervening Python execution
         // that could resize or free the bytearray.
@@ -201,7 +201,7 @@ fn encode_nested(
     let handle = value
         .get_type()
         .getattr(pyo3::intern!(py, "__fastproto__"))?;
-    let desc = handle.downcast_into::<Descriptor>().map_err(|_| {
+    let desc = handle.cast_into::<Descriptor>().map_err(|_| {
         pyo3::exceptions::PyTypeError::new_err("nested value is not a fastproto message")
     })?;
     let desc_ref = desc.borrow();
@@ -215,13 +215,13 @@ fn for_each_item<'py>(
     value: &Bound<'py, PyAny>,
     mut f: impl FnMut(Bound<'py, PyAny>) -> PyResult<()>,
 ) -> PyResult<()> {
-    if let Ok(list) = value.downcast::<PyList>() {
+    if let Ok(list) = value.cast::<PyList>() {
         for item in list.iter() {
             f(item)?;
         }
         return Ok(());
     }
-    if let Ok(tuple) = value.downcast::<PyTuple>() {
+    if let Ok(tuple) = value.cast::<PyTuple>() {
         for item in tuple.iter() {
             f(item)?;
         }
@@ -330,7 +330,7 @@ fn encode_map(
     depth: usize,
 ) -> PyResult<()> {
     let dict = value
-        .downcast::<PyDict>()
+        .cast::<PyDict>()
         .map_err(|_| pyo3::exceptions::PyTypeError::new_err("map field must be a dict"))?;
     let linked = refs.and_then(|r| r.get(&number));
     for (k, v) in dict.iter() {
@@ -429,10 +429,7 @@ fn encode_scalar_field(
             }
         }
         ScalarType::String => {
-            let s = value
-                .downcast::<PyString>()
-                .map_err(PyErr::from)?
-                .to_str()?;
+            let s = value.cast::<PyString>().map_err(PyErr::from)?.to_str()?;
             if !(skip_default && s.is_empty()) {
                 wire::write_tag(buf, number, wire::WireType::Len);
                 wire::write_len_delimited(buf, s.as_bytes());
@@ -505,10 +502,7 @@ fn encode_scalar(buf: &mut Vec<u8>, scalar: ScalarType, value: &Bound<'_, PyAny>
             wire::write_fixed64(buf, v.to_bits());
         }
         ScalarType::String => {
-            let s = value
-                .downcast::<PyString>()
-                .map_err(PyErr::from)?
-                .to_str()?;
+            let s = value.cast::<PyString>().map_err(PyErr::from)?.to_str()?;
             wire::write_len_delimited(buf, s.as_bytes());
         }
         ScalarType::Bytes => {

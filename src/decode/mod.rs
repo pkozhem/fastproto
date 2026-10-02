@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use pyo3::prelude::*;
-use pyo3::sync::GILOnceCell;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyBytes, PyDict, PyList, PyType};
 
 use crate::descriptor::{FieldKind, Label, MapValue, ScalarType, MAX_DEPTH};
@@ -22,8 +22,8 @@ use crate::message::{Descriptor, FastInit, LinkedRef};
 use crate::wellknown;
 use crate::wire::{self, Reader, WireError, WireType};
 
-static OBJECT_NEW: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
-static OBJECT_SETATTR: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
+static OBJECT_NEW: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static OBJECT_SETATTR: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 /// `object.__new__`, used by the fast construction path to allocate an
 /// instance without running `__init__`.
@@ -160,14 +160,14 @@ pub fn decode_message<'py>(
             FieldKind::Map { key, value } => {
                 let entry = reader.read_len_delimited().map_err(wire_err)?;
                 let (k, v) = decode_map_entry(py, *key, value, linked, entry, depth)?;
-                let map = values[idx].as_ref().unwrap().downcast::<PyDict>().unwrap();
+                let map = values[idx].as_ref().unwrap().cast::<PyDict>().unwrap();
                 map.set_item(k, v)?;
             }
             _ if field.label == Label::Repeated => {
                 let list = values[idx]
                     .as_ref()
                     .unwrap()
-                    .downcast::<PyList>()
+                    .cast::<PyList>()
                     .unwrap()
                     .clone();
                 let handled = decode_repeated(
@@ -446,7 +446,7 @@ fn decode_message_value<'py>(
         pyo3::exceptions::PyRuntimeError::new_err("message field was not linked to a class")
     })?;
     let cls = linked.class.bind(py);
-    let ty = cls.downcast::<PyType>()?;
+    let ty = cls.cast::<PyType>()?;
     match &linked.desc {
         Some(desc) => {
             let desc_ref = desc.bind(py).borrow();
