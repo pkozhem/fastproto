@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(cargo test)",
+      "Bash(cargo test *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo fmt)",
+      "Bash(cargo fmt *)",
+      "Bash(cargo build *)",
+      "Bash(.venv/bin/ruff *)",
+      "Bash(.venv/bin/ty *)",
+      "Bash(.venv/bin/python -m pytest *)",
+      "Bash(.venv/bin/maturin develop *)",
+      "Bash(VIRTUAL_ENV=.venv .venv/bin/maturin develop)",
+      "Bash(VIRTUAL_ENV=.venv .venv/bin/maturin develop *)",
+      "Bash(.venv/bin/python scripts/regen.py)",
+      "Bash(.venv/bin/python bench/compare.py)",
+      "Bash(uv sync)",
+      "Bash(protoc --version)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)"
+    ]
+  }
+}
