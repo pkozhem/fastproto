@@ -89,10 +89,11 @@ docs/_build/
 # VSCode
 .vscode/
 
-# AI Slop
-.claude/
-.cursor/
-.codex/
+# AI
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/SESSION*.md
+.claude/worktrees/
 
 # Project
 TODO.md
