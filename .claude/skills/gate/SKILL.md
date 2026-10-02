@@ -25,8 +25,8 @@ stopping at the first failure, then give a short summary.
    failed:
    ```bash
    cargo fmt --check
-   cargo clippy --all-targets -- -D warnings
-   cargo test
+   uv run cargo clippy --all-targets -- -D warnings
+   uv run cargo test
    .venv/bin/ruff check python tests scripts
    .venv/bin/ruff format --check python tests scripts
    .venv/bin/ty check

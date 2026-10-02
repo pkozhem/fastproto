@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 use pyo3::prelude::*;
-use pyo3::sync::GILOnceCell;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyBytes, PyDict, PyString, PyTuple, PyType};
 
 use crate::descriptor::{FieldIndex, FieldKind, Label, MapValue, MessageDescriptor};
@@ -44,7 +44,7 @@ pub(crate) struct LinkedRef {
     /// `enum_map`; values outside the table fall back to the dict.
     pub(crate) enum_table: Option<Vec<Option<Py<PyAny>>>>,
     /// For message classes: the class's own compiled descriptor, saving a
-    /// `__fastproto__` getattr + downcast per nested value.
+    /// `__fastproto__` getattr + cast per nested value.
     pub(crate) desc: Option<Py<Descriptor>>,
 }
 
@@ -88,7 +88,7 @@ pub struct Descriptor {
     pub(crate) last_size: AtomicUsize,
 }
 
-static ENUM_DEFAULT_MISSING: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
+static ENUM_DEFAULT_MISSING: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 /// `enum.Enum._missing_.__func__` — the default "no such value" hook. An enum
 /// whose `_missing_` is this exact function cannot observe coercion, so decode
@@ -255,7 +255,7 @@ impl Descriptor {
 fn build_linked_ref(py: Python<'_>, class: &Bound<'_, PyAny>) -> PyResult<LinkedRef> {
     // Message classes carry their compiled descriptor.
     if let Ok(handle) = class.getattr(pyo3::intern!(py, "__fastproto__")) {
-        if let Ok(desc) = handle.downcast_into::<Descriptor>() {
+        if let Ok(desc) = handle.cast_into::<Descriptor>() {
             return Ok(LinkedRef {
                 class: class.clone().unbind(),
                 enum_map: None,
@@ -270,7 +270,7 @@ fn build_linked_ref(py: Python<'_>, class: &Bound<'_, PyAny>) -> PyResult<Linked
     let mut enum_table = None;
     if let Ok(map) = class.getattr(pyo3::intern!(py, "_value2member_map_")) {
         if let (Ok(map), Ok(missing)) = (
-            map.downcast_into::<PyDict>(),
+            map.cast_into::<PyDict>(),
             class.getattr(pyo3::intern!(py, "_missing_")),
         ) {
             let default_missing = enum_default_missing(py)?;
